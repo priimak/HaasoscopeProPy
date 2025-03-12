@@ -1,0 +1,24 @@
+[project]
+name = "hassoscopepropy"
+dynamic = ["version"]
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyqtgraph",
+    "PyQt5",
+    "pyftdi",
+    "ftd2xx"
+]
+
+[build-system]
+requires = ["setuptools", "wheel", "setuptools-git-versioning"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools-git-versioning]
+enabled = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
