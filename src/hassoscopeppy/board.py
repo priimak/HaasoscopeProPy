@@ -1,9 +1,16 @@
 import time
+from enum import IntEnum
 
 from hassoscopeppy.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, \
     PDPolarity, ClkDivMode
 from hassoscopeppy.connection import Connection, connect
 from hassoscopeppy.utils import bit_asserted, int_to_bytes
+
+
+class TriggerType(IntEnum):
+    ON_RISING_EDGE = 1
+    ON_FALLING_EDGE = 2
+    EXTERNAL = 3
 
 
 class Commands:
@@ -13,6 +20,8 @@ class Commands:
     SWITCH_CLOCKS = [7, 0, 0, 0, 99, 99, 99, 99]
     FAN_ON_COMMAND = lambda fan_on: [2, 6, fan_on, 100, 100, 100, 100, 100]
 
+class Command:
+    ARM_TRIGGER = 1
 
 class Board:
     def __init__(self, connection: Connection):
@@ -28,11 +37,27 @@ class Board:
         self.dooversample = False
         self.num_chan_per_board = 2
 
+        self.expect_samples = 100
+        self.expect_samples_extra = 5  # enough to cover downsample shifting and toff shifting
+        self.nsubsamples = 10 * 4 + 8 + 2  # extra 4 for clk+str, and 2 dead beef
+
         self.adf_reset()
         self.pll_reset()
         self.setupboard(self.dopattern, self.dotwochannel, self.dooverrange)
         for c in range(self.num_chan_per_board):
             self.setchanacdc(chan = c, ac = 0, doswap = self.dooversample)
+
+    def get_waveform(self):
+        # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
+        expect_len = (self.expect_samples + self.expect_samples_extra) * 2 * self.nsubsamples
+
+        self.connection.send([0, 99, 99, 99] + int_to_bytes(expect_len))  # send the 4 bytes to usb
+        data = self.connection.recv(expect_len)  # recv from usb
+        rx_len = len(data)
+        # self.total_rx_len += rx_len
+        if expect_len != rx_len:
+            print('*** expect_len (%d) and rx_len (%d) mismatch' % (expect_len, rx_len))
+        return data
 
     def setchanacdc(self, chan, ac, doswap: bool):
         if doswap: chan = (chan + 1) % 2
@@ -370,3 +395,37 @@ class Board:
 
 def boards() -> list[Board]:
     return [Board(connection) for connection in connect()]
+
+if __name__ == '__main__':
+    board = boards()[0]
+    print(board)
+    waveform: bytes = board.get_waveform()
+    print(waveform)
+    
+    # lvds1bits
+    # #1 @0
+        # [0:13]
+        # [0:11][12][13]
+        # data  clk strobe
+    # #2 @14
+        # [0:13]
+        # [0:11][12][13]
+        # data  clk strobe
+    
+    # lvds2bits
+    # #11 @0
+        # [0:13]
+        # [0:11][12][13]
+        # data  clk strobe
+    ...
+
+    # lvds3bits
+    ...
+
+    # lvds4bits
+    ...
+
+    # lvdsLbits
+    ...
+
+
