@@ -21,13 +21,16 @@
 
 from math import ceil, floor, log
 
+
 class DeviceType:
     ADF4350 = 0,
     ADF4351 = 1
 
+
 class LowNoiseSpurMode:
     LowNoiseMode = 0
     LowSpurMode = 1
+
 
 class MuxOut:
     ThreeState = 0
@@ -38,31 +41,38 @@ class MuxOut:
     AnalogLockDetect = 5
     DigitalLockDetect = 6
 
+
 class PDPolarity:
     Negative = 0
     Positive = 1
 
+
 class BandSelectClockMode:
     Low = 0
     High = 1
+
 
 class ClkDivMode:
     ClockDividerOff = 0
     FastLockEnable = 1
     ResyncEnable = 2
 
+
 class FeedbackSelect:
     Divider = 0
     Fundamental = 1
+
 
 class AuxOutputSelect:
     DividedOutput = 0
     Fundamental = 1
 
+
 class LDPinMode:
     Low = 0
     DigitalLockDetect = 1
     High = 3
+
 
 def calculate_regs(
         device_type=DeviceType.ADF4351,
@@ -89,7 +99,7 @@ def calculate_regs(
     pfd_freq = ((ref_freq * (2 if ref_doubler else 1)) /
                 ((2 if ref_div2 else 1) * r_counter))
 
-    output_divider=2
+    output_divider = 2
     for log2_output_divider in range(7):
         output_divider = 2 ** log2_output_divider
         if 2200.0 / output_divider <= freq:
@@ -145,6 +155,7 @@ def calculate_regs(
                              'to 125kHz or less.')
 
     return int(INT), int(MOD), int(FRAC), output_divider, band_select_clock_divider
+
 
 def make_regs(
         device_type=DeviceType.ADF4351,

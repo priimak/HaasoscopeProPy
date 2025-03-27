@@ -10,7 +10,8 @@ dependencies = [
     "pyqtgraph",
     "PyQt5",
     "pyftdi",
-    "ftd2xx"
+    "ftd2xx",
+    "bitstruct"
 ]
 
 [build-system]
