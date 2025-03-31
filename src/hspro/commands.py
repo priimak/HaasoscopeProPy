@@ -100,7 +100,6 @@ class Commands:
         if prelength_to_take > 65535:
             raise RuntimeError(f"prelength_to_take value cannot be greater than 65535")
         else:
-
             self.conn.command([2, 7] + int_to_bytes(prelength_to_take) + [0, 0])
             # self.conn.command([2, 7] + list(prelength_to_take.to_bytes(2, byteorder="little")) + [0, 0, 0, 0])
 
@@ -186,7 +185,6 @@ class Commands:
             tot: int,
             trigger_on_chanel: int
     ) -> None:
-        print("set_trigger_props")
         self.conn.command([
             8, trigger_level + 1, trigger_delta, int(trigger_pos / 256), trigger_pos % 256, tot, trigger_on_chanel, 100
         ])
@@ -211,7 +209,7 @@ class Commands:
             # print("board",board,"sample triggered", binprint(triggercounter[3]), binprint(triggercounter[2]), binprint(triggercounter[1]))
             gotzerobit = False
             sample_triggered = 0
-            for s in range(21):
+            for s in range(20):
                 thebit = getbit(trigger_data[int(s / 8) + 1], s % 8)
                 if thebit == 0:
                     gotzerobit = True
@@ -227,8 +225,10 @@ class Commands:
             trigger_type: TriggerType,
             two_channels: bool,
             oversample: bool,
-            samples_after_trigger: int
+            absolute_trigger_pos: float,
+            expect_samples: int
     ) -> bool:
+        samples_after_trigger = expect_samples - absolute_trigger_pos + 1
         trigger_data = self.conn.command(
             [
                 13, trigger_type.value,

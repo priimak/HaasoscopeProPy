@@ -1,8 +1,6 @@
-import sys
 import time
 from abc import ABC
 from dataclasses import dataclass
-from pathlib import Path
 
 import bitstruct
 from matplotlib import pyplot as plt
@@ -104,7 +102,7 @@ class BoardState:
     nbadstr = 0
     eventcounter = 0
     nsubsamples = 10 * 4 + 8 + 2  # extra 4 for clk+str, and 2 dead beef
-    sample_triggered = [0]
+    # sample_triggered = [0]
     doeventcounter = False
     fitwidthfraction = 0.2
     extrigboardstdcorrection = 1
@@ -112,13 +110,14 @@ class BoardState:
     lastrate = 0
     lastsize = 0
     VperD = [0.16, 0.16]
-    plljustreset = [0]
+    plljustreset = 0
     dooversample = False
     doresamp = 0
+    trigger_pos: float = 0.5
 
     @property
-    def triggerpos(self) -> int:
-        return int(self.expect_samples * 128 / 256)
+    def absolute_trigger_pos(self) -> int:
+        return int(self.expect_samples * self.trigger_pos)
 
     @property
     def max_x(self) -> float:
@@ -128,6 +127,7 @@ class BoardState:
 class Board:
     def __init__(self, connection: Connection, debug: bool, debug_spi: bool):
         self.comm = Commands(connection)
+        self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
         self.board = connection.board
         self.state = BoardState()
 
@@ -141,6 +141,48 @@ class Board:
         for c in range(self.state.num_chan_per_board):
             self.setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
 
+        # # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
+        # # Raise error if calibration is not done within 1 second.
+        # start_at = time.time()
+        # while True:
+        #     boardin = self.comm.read_register(RegisterIndex.boardin)
+        #     if (boardin & 0b10000000) > 0:
+        #         break
+        #     elif (time.time() - start_at > 3):
+        #         # self.cleanup()
+        #         raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
+
+    def force_arm_trigger(self, trigger_type: TriggerType) -> bool:
+        return self.comm.force_arm_trigger(
+            trigger_type=trigger_type,
+            two_channels=self.state.dotwochannel,
+            oversample=self.state.dooversample,
+            absolute_trigger_pos=self.state.absolute_trigger_pos,
+            expect_samples=self.state.expect_samples
+        )
+
+    def set_trigger_props(
+            self,
+            trigger_level: int,
+            trigger_delta: int,
+            trigger_pos: float,
+            tot: int,
+            trigger_on_chanel: int
+    ) -> None:
+        if trigger_pos < 0 or trigger_pos > 1:
+            raise RuntimeError("Trigger position must be between 0 and 1.")
+
+        self.state.trigger_pos = trigger_pos
+        self.comm.set_trigger_props(
+            trigger_level=trigger_level,
+            trigger_delta=trigger_delta,
+            trigger_pos=self.state.absolute_trigger_pos,
+            tot=tot,
+            trigger_on_chanel=trigger_on_chanel
+        )
+        self.comm.set_prelength_to_take(self.state.absolute_trigger_pos + 4)
+
+    def wait_for_calibration_done(self):
         # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
         # Raise error if calibration is not done within 1 second.
         start_at = time.time()
@@ -148,9 +190,9 @@ class Board:
             boardin = self.comm.read_register(RegisterIndex.boardin)
             if (boardin & 0b10000000) > 0:
                 break
-            elif (time.time() - start_at > 1):
-                self.cleanup()
-                raise RuntimeError("ADC calibration on the board did not complete within 1 second.")
+            elif (time.time() - start_at > 3):
+                # self.cleanup()
+                raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
 
     def adf_reset(self):
         self.__adf4350(
@@ -236,6 +278,7 @@ class Board:
     def dophase(self, plloutnum: int, updown: bool, pllnum: int, quiet=False):
         # for 3rd byte, 000:all 001:M 010=2:C0 011=3:C1 100=4:C2 101=5:C3 110=6:C4
         # for 4th byte, 1 is up, 0 is down
+        print(">>>>>>>>>> dophase")
         self.comm.set_clk_phase_adjust(pll_num=pllnum, pll_out_num=plloutnum, up_down=updown)
         self.state.phasecs[pllnum][plloutnum] = self.state.phasecs[pllnum][plloutnum] + (1 if updown else -1)
 
@@ -344,12 +387,21 @@ class Board:
             self.comm.spi_command("PAT_SEL", 0x02, 0x05, 0x02, False)  # normal ADC data
             self.comm.spi_command("UPAT_CTRL", 0x01, 0x90, 0x1e, False)  # set lane pattern to default
 
+        cal_en = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
+        print(cal_en)
         self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
+        cal_en = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
+        print(cal_en)
+
+        # v = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
+
         self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x01, False)  # enable LVDS interface
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x00, False)  # assert ~sync signal
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x01, False)  # deassert ~sync signal
-        # self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x00, False)
-        # self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x01, False)
+        self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x00, False)
+        self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x01, False)
+
+        self.wait_for_calibration_done()
 
         self.comm.set_spi_mode(0)
         self.comm.spi_command("Amp Rev ID", 0x00, 0x00, 0x00, True, cs=1, nbyte=2)
@@ -429,7 +481,7 @@ class Board:
             else:
                 return downsamplemergingcounter
 
-    def parse_waveform_data(self, waveform_data: bytes) -> list[float]:
+    def parse_waveform_data2(self, waveform_data: bytes) -> list[float]:
         w = []
         dlen = int(len(waveform_data) / 100)
         for i in range(dlen):
@@ -439,12 +491,16 @@ class Board:
                 w.append(v * self.state.yscale)
         return w
 
-    def get_waveform2(self, expect_samples: int = 100, force: bool = False) -> list[float] | None:
-        readyevent, sample_triggered = self.comm.is_capture_available()
-        if not force and not readyevent:
-            return None
+    def get_sample_triggered(self) -> int:
+        b = self.comm.read_register(RegisterIndex.sample_triggered).to_bytes(4)
+        sample_triggered = 19 - f"{b[1]:04b}{b[2]:08b}{b[3]:08b}".find("10")
+        if sample_triggered > 19:
+            return 0
+        else:
+            return sample_triggered
 
-        self.state.sample_triggered = sample_triggered
+    def get_waveform(self) -> list[float] | None:
+        sample_triggered = self.get_sample_triggered()
 
         if self.state.doeventcounter:
             new_event_counter = self.comm.get_eventconter()
@@ -455,32 +511,34 @@ class Board:
             self.state.eventcounter = new_event_counter
 
         downsamplemergingcounter = self.get_downsample_merging_counter()
-        print("downsamplemergingcounter", downsamplemergingcounter)
 
         # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
-        # expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
-        # expect_len = 10500
-        expect_len = (expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
-        print(f"expect_len = {expect_len}")
+        expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
         waveform_data = self.comm.get_waveform_data(expect_len)
-        print("len(waveform_data)", len(waveform_data))
 
         # file = (Path.home() / "tmp" / "waveform.bin")
         # file.write_bytes(waveform_data)
 
         rx_len = len(waveform_data)
         self.state.total_rx_len += rx_len
-        return self.drawchannels(waveform_data, expect_samples, downsamplemergingcounter)[0]
-        # return self.parse_waveform_data(waveform_data)
+        return self.parse_waveform_data(
+            waveform_data, self.state.expect_samples, downsamplemergingcounter, sample_triggered
+        )[0]
 
-    def drawchannels(self, data, expect_samples: int, downsamplemergingcounter) -> tuple[list[float], list[float]]:
-        (Path.home() / "tmp" / "waveform.bin").write_bytes(data)
+    def parse_waveform_data(
+            self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int
+    ) -> tuple[list[float], list[float]]:
         nbadclkA = 0
         nbadclkB = 0
         nbadclkC = 0
         nbadclkD = 0
         nbadstr = 0
-        traces: tuple[list[float], list[float]] = [], []
+
+        one_channel_trace_len = 40 * expect_samples
+        two_channel_trace_len = 20 * expect_samples
+        trace_A = [0] * (two_channel_trace_len if self.state.dotwochannel else one_channel_trace_len)
+        trace_B = [0] * (two_channel_trace_len if self.state.dotwochannel else 0)
+        traces: tuple[list[float], list[float]] = trace_A, trace_B
 
         for s in range(0, expect_samples + self.state.expect_samples_extra):
             subsamples = data[self.state.nsubsamples * 2 * s: self.state.nsubsamples * 2 * (s + 1)]
@@ -519,21 +577,7 @@ class Board:
                     if strobe != 0:
                         if strobe != 8 and strobe != 128 and strobe != 2048 and strobe != 32768:
                             if strobe * 4 != 8 and strobe * 4 != 128 and strobe * 4 != 2048 and strobe * 4 != 32768:
-                                # if self.debugstrobe: print("s=", s, "n=", n, "str", binprint(strobe), strobe)
                                 nbadstr = nbadstr + 1
-
-                # if self.debug and self.debugprint:
-                #     goodval = -1
-                #     if s < 0 or (n < 40 and val != 0 and val != goodval):
-                #         if self.showbinarydata and n < 40:
-                #             # if s<0 or chan!=3 or (chan==3 and val!=255 and val!=511 and val!=1023 and val!=2047):
-                #             if s < 100:
-                #                 if lowbits > 0 or highbits > 0:
-                #                     print("s=", s, "n=", n, "pbyte=", pbyte, "chan=", chan, binprint(data[pbyte + 1]),
-                #                           binprint(data[pbyte + 0]), val)
-                #         elif n < 40:
-                #             print("s=", s, "n=", n, "pbyte=", pbyte, "chan=", chan, hex(data[pbyte + 1]),
-                #                   hex(data[pbyte + 0]))
                 if n < 40:
                     val = val * self.state.yscale
                     if self.state.dooversample:
@@ -541,22 +585,29 @@ class Board:
                         val *= self.state.extrigboardstdcorrection
                     if self.state.dotwochannel:
                         samp = s * 20 + 19 - n % 10 - int(chan / 2) * 10
-                        samp = samp - int(2 * (self.state.sample_triggered + (
-                                downsamplemergingcounter - 1) % self.state.downsamplemerging * 10) / self.state.downsamplemerging)
+                        samp = samp - int(
+                            2 * (
+                                    sample_triggered +
+                                    (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
+                            ) / self.state.downsamplemerging
+                        )
                         # if self.doexttrig[board]: samp = samp + int(self.toff / self.downsamplefactor)
                         if samp >= (2 * 10 * expect_samples): continue
                         ch = chan % 2
-                        traces[ch].append(val)
+                        traces[ch][samp] = val
                     else:
                         samp = s * 40 + 39 - n
-                        samp = samp - int(4 * (self.state.sample_triggered + (
-                                downsamplemergingcounter - 1) % self.state.downsamplemerging * 10) / self.state.downsamplemerging)
+                        samp = samp - int(
+                            4 * (
+                                    sample_triggered +
+                                    (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
+                            ) / self.state.downsamplemerging
+                        )
                         # if self.doexttrig[board]: samp = samp + int(self.toff / self.downsamplefactor)
                         if samp >= (4 * 10 * expect_samples): continue
-                        traces[0].append(val)
-                        # print(f"samp = {samp} vs {self.xydata[board][1].size}")
+                        traces[0][samp] = val
 
-        # self.adjustclocks(board, nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
+        self.adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
 
         self.nbadclkA = nbadclkA
         self.nbadclkB = nbadclkB
@@ -566,39 +617,16 @@ class Board:
 
         return traces
 
-    def get_waveform(self) -> list[float] | None:
-        rx_len = 0
-        try:
-            readyevent, sample_triggered = self.comm.arm_trigger(
-                trigger_type=(TriggerType.EXTERNAL if self.state.doexttrig else self.state.triggertype),
-                two_channels=self.state.dotwochannel,
-                oversample=self.state.dooversample,
-                samples_after_trigger=(self.state.expect_samples - self.state.triggerpos + 1)
-            )
-            if readyevent:
-                self.state.sample_triggered = sample_triggered
-
-                if self.state.doeventcounter:
-                    new_event_counter = self.comm.get_eventconter()
-                    if new_event_counter != self.state.eventcounter + 1 and new_event_counter != 0:
-                        # check event count, but account for rollover
-                        print("Event counter not incremented by 1?", new_event_counter, self.state.eventcounter,
-                              " for board", self.board)
-                    self.state.eventcounter = new_event_counter
-
-                downsamplemergingcounter = self.get_downsample_merging_counter()
-
-                # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
-                expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
-                waveform_data = self.comm.get_waveform_data(expect_len)
-                rx_len = len(waveform_data)
-                self.state.total_rx_len += rx_len
-                return self.parse_waveform_data(waveform_data)
-        except Exception as ex:
-            print(f"Device error: {ex}")
-            sys.exit(1)
-
-    # def get_waveforms(self) -> tuple[list[float] | None, list[float] | None]:
+    def adjustclocks(self, nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr):
+        if (nbadclkA + nbadclkB + nbadclkC + nbadclkD + nbadstr > 4) and self.state.phasecs[0][
+            2] < 20:  # adjust phase by 90 deg
+            n = 6  # amount to adjust clkout (positive)
+            for i in range(n): self.dophase(2, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clkout
+        if self.state.plljustreset > 0: self.state.plljustreset -= 1  # count down while collecting events
+        if self.state.plljustreset == 1:
+            # adjust back down to a good range after detecting that it needs to be shifted by 90 deg or not
+            n = self.state.pll_test_c2phase_down  # amount to adjust clkout (negative)
+            for i in range(n): self.dophase(2, False, pllnum=0, quiet=(i != n - 1))  # adjust phase of clkout
 
     def force_data_acquisition(self) -> bool:
         n_tries = 20
@@ -636,6 +664,13 @@ class Board:
 
             # if we are here timeout expired and waveform is still not available
             return WaveformUnavailable()
+
+    def set_memory_depth(self, depth: int) -> None:
+        """
+        Set total number of data point blocks to capture. Each block is 40 points in single channel
+        mode and 20 in double channel mode.
+        """
+        self.state.expect_samples = depth
 
 
 def mk_board(connection: Connection, debug: bool, debug_spi: bool):
