@@ -1,6 +1,7 @@
 import time
 from abc import ABC
 from dataclasses import dataclass
+from enum import Enum
 
 import bitstruct
 from matplotlib import pyplot as plt
@@ -12,7 +13,8 @@ from hspro.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandS
 from hspro.commands import Commands, TriggerType
 from hspro.conn.connection import Connection
 from hspro.registers_enum import RegisterIndex
-from hspro.utils import bit_asserted, int_to_bytes
+from hspro.utils import bit_asserted, int_to_bytes, Duration, TimeUnit
+from hspro.waveform import Waveform
 
 
 class WaveformAvailability(ABC):
@@ -28,6 +30,21 @@ class WaveformAvailable(WaveformAvailability):
 
 class WaveformUnavailable(WaveformAvailability):
     pass
+
+
+class BoardConsts(Enum):
+    SAMPLE_RATE_GHZ = 3.2
+    NATIVE_SAMPLE_PERIOD_S = 3.125e-10
+
+
+def find_downsample_parameters(requested_dt: Duration) -> tuple[float, int, int]:
+    requested_dt_s = requested_dt.to_float(TimeUnit.S)
+    for downsample in range(32):
+        for downsamplemerging in range(1, 256):
+            dt_s = BoardConsts.NATIVE_SAMPLE_PERIOD_S.value * downsamplemerging * pow(2, downsample)
+            if dt_s >= requested_dt_s:
+                return dt_s, downsample, downsamplemerging
+    raise RuntimeError("Failed to find valid downsample parameters")
 
 
 @dataclass
@@ -68,8 +85,11 @@ class BoardState:
     highresval = 1
     xscale = 1
     xscaling = 1
-    yscale = 3.3 / 2.03 * 10 * 5 / 8 / pow(2,
-                                           12)  # this is the size of 1 bit, so that 2^12 bits fill the 10.x divisions on the screen
+
+    # this is the size of 1 bit, so that 2^12 bits fill the 10.x divisions on the screen
+    yscale = 3.3 / 2.03 * 10 * 5 / 8 / pow(2, 12)
+    dV = 1
+
     min_y = -5  # -pow(2, 11) * yscale
     max_y = 5  # pow(2, 11) * yscale
     min_x = 0
@@ -114,6 +134,10 @@ class BoardState:
     dooversample = False
     doresamp = 0
     trigger_pos: float = 0.5
+    dt_s: float = BoardConsts.NATIVE_SAMPLE_PERIOD_S.value
+
+    def samples_per_row_per_waveform(self) -> int:
+        return 20 if self.dotwochannel else 40
 
     @property
     def absolute_trigger_pos(self) -> int:
@@ -140,17 +164,23 @@ class Board:
         self.setupboard()
         for c in range(self.state.num_chan_per_board):
             self.setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
+        self.comm.set_rolling(False)
 
-        # # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
-        # # Raise error if calibration is not done within 1 second.
-        # start_at = time.time()
-        # while True:
-        #     boardin = self.comm.read_register(RegisterIndex.boardin)
-        #     if (boardin & 0b10000000) > 0:
-        #         break
-        #     elif (time.time() - start_at > 3):
-        #         # self.cleanup()
-        #         raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
+    def set_voltage_div(self, channel: int, dV: float, ten_x_probe: bool) -> float:
+        dV = self.comm.set_voltage_div(channel=channel, dV=dV, do_oversample=False, ten_x_probe=ten_x_probe)
+        self.state.dV = dV
+        return dV
+
+    def set_time_scale(self, time_scale: Duration | str) -> Duration:
+        requested_time_scale = Duration.value_of(time_scale)
+        num_samples_per_division = self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
+        requested_dt = requested_time_scale / num_samples_per_division
+        dt_s, downsample, downsamplemerging = find_downsample_parameters(requested_dt)
+        self.state.dt_s = dt_s
+        self.state.downsample = downsample
+        self.state.downsamplemerging = downsamplemerging
+        self.comm.set_downsample(downsample=downsample, highres=True, downsample_merging=downsamplemerging)
+        return Duration.value_of(f"{dt_s} s").optimize()
 
     def force_arm_trigger(self, trigger_type: TriggerType) -> bool:
         return self.comm.force_arm_trigger(
@@ -160,6 +190,9 @@ class Board:
             absolute_trigger_pos=self.state.absolute_trigger_pos,
             expect_samples=self.state.expect_samples
         )
+
+    def set_timescale_s(self, time_per_division_s: float) -> None:
+        pass
 
     def set_trigger_props(
             self,
@@ -192,18 +225,19 @@ class Board:
                 break
             elif (time.time() - start_at > 3):
                 # self.cleanup()
+                self.comm.get_boardin()
                 raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
 
     def adf_reset(self):
         self.__adf4350(
-            freq=self.state.samplerate * 1000 / 2,
+            freq=BoardConsts.SAMPLE_RATE_GHZ.value * 1000 / 2,
             phase=None,
             themuxout=self.state.themuxoutV
         )
         time.sleep(0.1)
         res = self.comm.get_boardin()
         if self.debug:
-            if bit_asserted(res, 0):
+            if bit_asserted(res, 5):
                 print(f"Adf pll locked for board {self.board}")
             else:
                 print(f"Adf pll for board {self.board} not locked?")  # should be 1 if locked
@@ -387,21 +421,14 @@ class Board:
             self.comm.spi_command("PAT_SEL", 0x02, 0x05, 0x02, False)  # normal ADC data
             self.comm.spi_command("UPAT_CTRL", 0x01, 0x90, 0x1e, False)  # set lane pattern to default
 
-        cal_en = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
-        print(cal_en)
         self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
-        cal_en = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
-        print(cal_en)
-
-        # v = self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
+        self.wait_for_calibration_done()
 
         self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x01, False)  # enable LVDS interface
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x00, False)  # assert ~sync signal
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x01, False)  # deassert ~sync signal
         self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x00, False)
         self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x01, False)
-
-        self.wait_for_calibration_done()
 
         self.comm.set_spi_mode(0)
         self.comm.spi_command("Amp Rev ID", 0x00, 0x00, 0x00, True, cs=1, nbyte=2)
@@ -471,7 +498,7 @@ class Board:
         self.comm.set_led((0x0f, 0x0f, 0x0f), (0x0f, 0x0f, 0x0f))
         self.comm.set_configured(False)
 
-    def get_downsample_merging_counter(self) -> int:
+    def downsample_merging_counter_triggered(self) -> int:
         if self.state.downsamplemerging == 0:
             return 0
         else:
@@ -499,7 +526,7 @@ class Board:
         else:
             return sample_triggered
 
-    def get_waveform(self) -> list[float] | None:
+    def get_waveform(self) -> Waveform:
         sample_triggered = self.get_sample_triggered()
 
         if self.state.doeventcounter:
@@ -510,7 +537,8 @@ class Board:
                       " for board", self.board)
             self.state.eventcounter = new_event_counter
 
-        downsamplemergingcounter = self.get_downsample_merging_counter()
+        downsample_merging_counter_triggered = self.downsample_merging_counter_triggered()
+        print(f"downsample_merging_counter_triggered = {downsample_merging_counter_triggered}")
 
         # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
         expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
@@ -521,9 +549,15 @@ class Board:
 
         rx_len = len(waveform_data)
         self.state.total_rx_len += rx_len
-        return self.parse_waveform_data(
-            waveform_data, self.state.expect_samples, downsamplemergingcounter, sample_triggered
-        )[0]
+        trace_1, trace_2 = self.parse_waveform_data(
+            waveform_data, self.state.expect_samples, downsample_merging_counter_triggered, sample_triggered
+        )
+        if self.state.dotwochannel:
+            raise RuntimeError()
+        else:
+            pos = self.state.absolute_trigger_pos * self.state.samples_per_row_per_waveform()
+            print(f"pos = {pos}")
+            return Waveform(self.state.dt_s, trace_1, pos, self.state.dV)
 
     def parse_waveform_data(
             self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int
@@ -735,11 +769,3 @@ if __name__ == '__main__z':
     plt.show()
     # hl[0].set_ydata(waveform)
     # time.sleep(1)
-
-if __name__ == '__main__':
-    x = WaveformUnavailable()
-    match x:
-        case WaveformUnavailable():
-            print("Waveform unavailable")
-        case WaveformAvailable(a):
-            print(f"Waveform available: {a}")

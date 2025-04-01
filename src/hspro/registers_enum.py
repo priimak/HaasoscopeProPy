@@ -11,3 +11,5 @@ class RegisterIndex(IntEnum):
     eventcounter = 6
     sample_triggered = 7
     downsamplemergingcounter_triggered = 8
+    downsamplemerging = 9
+    downsample = 10

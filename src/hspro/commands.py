@@ -68,8 +68,8 @@ class Commands:
         """ TODO: Describe me """
         res = self.conn.command([2, 1, 0, 0, 0, 0, 0, 0])[0]
 
-        if self.debug:
-            print(f"Board in bits: {res:08b}")
+        # if self.debug:
+        print(f"Board in bits: {res:08b}")
 
         return res
 
@@ -252,7 +252,6 @@ class Commands:
         self.set_spi_mode(0)
 
         chan = (channel + 1) % 2 if do_oversample else channel
-        print(f"set_voltage_div {dV} -> {db}")
         if chan == 0: self.spi_command("Amp Gain 0", 0x02, 0x00, 26 - db, False, cs=2, nbyte=2, quiet=True)
         if chan == 1: self.spi_command("Amp Gain 1", 0x02, 0x00, 26 - db, False, cs=1, nbyte=2, quiet=True)
         return actual_voltage_per_division
@@ -303,6 +302,10 @@ class Commands:
             case 7:  # sample_triggered
                 return int.from_bytes(response, byteorder="little")
             case 8:  # downsamplemergingcounter_triggered
+                return response[0]
+            case RegisterIndex.downsamplemerging:  # downsamplemerging
+                return response[0]
+            case RegisterIndex.downsample:  # downsample
                 return response[0]
             case _:
                 raise RuntimeError(f"Unknown register index {reg}")
