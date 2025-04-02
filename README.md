@@ -35,7 +35,8 @@ yet, `uv` will download and install somewhere under `~/.local/` if it is not alr
 
 ## Running example application
 
-Assuming that you went through steps listed above you can run example.py from the terminal like so:
+Assuming that you went through steps listed above you can run [example.py](https://github.com/priimak/HaasoscopeProPy/blob/master/src/example.py) 
+from the terminal like so:
 
 ```shell
 uv run --directory src example.py
