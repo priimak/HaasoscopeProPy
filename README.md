@@ -4,13 +4,13 @@
 
 Install [uv](https://docs.astral.sh/uv/). 
 
-On Linux or macOS run in the terminal
+To do so on Linux or macOS run following in the terminal
 
 ```shell
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-On Windows run following in Powershell window:
+On Windows run following in the Powershell window:
 
 ```shell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
