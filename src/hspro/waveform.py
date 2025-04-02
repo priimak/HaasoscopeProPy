@@ -2,7 +2,7 @@ from hspro.utils import TimeUnit, Duration
 
 
 class Waveform:
-    def __init__(self, dt_s: float, vs: list[float], trigger_pos: int, dV: float):
+    def __init__(self, dt_s: float, vs: list[float], trigger_pos: int, dV: float, trigger_level_V: float | None):
         self.dt_s = dt_s
 
         time_window_s = dt_s * len(vs)
@@ -14,6 +14,7 @@ class Waveform:
         self.vs = vs
         self.trigger_pos = trigger_pos
         self.dV = dV
+        self.trigger_level_V = trigger_level_V
 
     def __repr__(self):
         return f"Waveform({len(self.vs)})"

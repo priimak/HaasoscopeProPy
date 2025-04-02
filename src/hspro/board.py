@@ -3,10 +3,6 @@ from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 
-import bitstruct
-from matplotlib import pyplot as plt
-from matplotlib.animation import FuncAnimation
-
 import hspro.conn.connection_op
 from hspro.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, PDPolarity, \
     ClkDivMode
@@ -32,19 +28,22 @@ class WaveformUnavailable(WaveformAvailability):
     pass
 
 
-class BoardConsts(Enum):
+class InputImpedance(Enum):
+    FIFTY_OHM = 0
+    ONE_MEGA_OHM = 1
+
+
+class ChannelCoupling(Enum):
+    AC = 0
+    DC = 1
+
+
+class BoardConsts:
     SAMPLE_RATE_GHZ = 3.2
     NATIVE_SAMPLE_PERIOD_S = 3.125e-10
-
-
-def find_downsample_parameters(requested_dt: Duration) -> tuple[float, int, int]:
-    requested_dt_s = requested_dt.to_float(TimeUnit.S)
-    for downsample in range(32):
-        for downsamplemerging in range(1, 256):
-            dt_s = BoardConsts.NATIVE_SAMPLE_PERIOD_S.value * downsamplemerging * pow(2, downsample)
-            if dt_s >= requested_dt_s:
-                return dt_s, downsample, downsamplemerging
-    raise RuntimeError("Failed to find valid downsample parameters")
+    VALID_DOWNSAMPLEMERGIN_VALUES_ONE_CHANNEL = [1, 2, 4, 8, 20, 40]
+    VALID_DOWNSAMPLEMERGIN_VALUES_TWO_CHANNELS = [1, 2, 4, 10, 20]
+    NUM_CHAN_PER_BOARD = 2
 
 
 @dataclass
@@ -53,9 +52,9 @@ class BoardState:
     expect_samples_extra = 5  # enough to cover downsample shifting and toff shifting
     samplerate = 3.2  # freq in GHz
     nsunits = 1
-    num_chan_per_board = 2
     num_logic_inputs = 0
     tenx = 1
+    ten_x_probe = [False, False]  # one for each channel
     debug = False
     dopattern = 0  # set to 4 to do max varying test pattern
     debugprint = True
@@ -76,19 +75,28 @@ class BoardState:
     toff = 0
     themuxoutV = True
     phasecs = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
+
     pll_test_c2phase = 5
     pll_test_c2phase_down = 2
+    pll_test_c0phase = -5
+    pll_test_c0phase_down = 2
+
     doexttrig = False
     paused = True  # will unpause with dostartstop at startup
     downsample = 0
+    downsamplemerging = 1
+    highres = True
     downsamplefactor = 1
-    highresval = 1
     xscale = 1
     xscaling = 1
 
     # this is the size of 1 bit, so that 2^12 bits fill the 10.x divisions on the screen
     yscale = 3.3 / 2.03 * 10 * 5 / 8 / pow(2, 12)
-    dV = 1
+    requested_dV = [1.0, 1.0]
+    dV = [1.0, 1.0]
+    requested_offset_V = [0.0, 0.0]  # requested voltage offset per channel
+    offset_V = [0.0, 0.0]  # actual offset per channel
+    configured_trigger_level = [0.0, 0.0]
 
     min_y = -5  # -pow(2, 11) * yscale
     max_y = 5  # pow(2, 11) * yscale
@@ -104,7 +112,6 @@ class BoardState:
     hline = 0
     vline = 0
     getone = False
-    downsamplemerging = 1
     units = "ns"
     dodrawing = True
     chtext = ""
@@ -134,7 +141,8 @@ class BoardState:
     dooversample = False
     doresamp = 0
     trigger_pos: float = 0.5
-    dt_s: float = BoardConsts.NATIVE_SAMPLE_PERIOD_S.value
+    dt_s: float = BoardConsts.NATIVE_SAMPLE_PERIOD_S
+    requested_time_scale: Duration | None = None
 
     def samples_per_row_per_waveform(self) -> int:
         return 20 if self.dotwochannel else 40
@@ -147,40 +155,105 @@ class BoardState:
     def max_x(self) -> float:
         return 4 * 10 * self.expect_samples * self.downsamplefactor / self.nsunits / self.samplerate
 
+    @property
+    def configured_trigger_level_V(self) -> list[float]:
+        return [self.dV[ch] * 5 * self.configured_trigger_level[ch] for ch in range(2)]
+
 
 class Board:
     def __init__(self, connection: Connection, debug: bool, debug_spi: bool):
         self.comm = Commands(connection)
         self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
-        self.board = connection.board
+        self.board_num = connection.board
         self.state = BoardState()
 
         self.debug = debug
         self.debug_spi = debug_spi
 
         # configure the board
-        self.adf_reset()
-        self.pllreset()
-        self.setupboard()
-        for c in range(self.state.num_chan_per_board):
-            self.setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
+        self.cleanup()
+        self.reset_adf()
+        self.reset_plls()
+        self.__setupboard()
+        for c in range(BoardConsts.NUM_CHAN_PER_BOARD):
+            self.__setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
         self.comm.set_rolling(False)
+        self.set_time_scale("200ns")
 
-    def set_voltage_div(self, channel: int, dV: float, ten_x_probe: bool) -> float:
-        dV = self.comm.set_voltage_div(channel=channel, dV=dV, do_oversample=False, ten_x_probe=ten_x_probe)
-        self.state.dV = dV
-        return dV
+    def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> None:
+        if self.state.ten_x_probe[channel] != ten_x_probe:
+            self.state.ten_x_probe[channel] = ten_x_probe
+            self.__update_voltage_div(channel)
+
+    def set_chanel_voltage_div(self, channel: int, dV: float) -> float:
+        self.state.requested_dV[channel] = dV
+        self.__update_voltage_div(channel)
+        return self.state.dV[channel]
+
+    def __update_voltage_div(self, channel: int) -> None:
+        self.state.dV[channel] = self.comm.set_voltage_div(
+            channel=channel,
+            dV=self.state.requested_dV[channel],
+            do_oversample=False,
+            ten_x_probe=self.state.ten_x_probe[channel]
+        )
+
+    def enable_two_channels(self, enable: bool) -> None:
+        if self.state.dotwochannel != enable:
+            self.state.dotwochannel = enable
+            self.__update_leds()
+            self.__setupboard()
+            self.__update_time_scale()
+
+    def __update_leds(self):
+        if self.state.dotwochannel:
+            self.comm.set_led((0x0f, 0x00, 0x00), (0x00, 0x0f, 0x00))
+        else:
+            self.comm.set_led((0x0f, 0x00, 0x00), (0x00, 0x00, 0x00))
 
     def set_time_scale(self, time_scale: Duration | str) -> Duration:
-        requested_time_scale = Duration.value_of(time_scale)
+        """
+        Set time duration per horizontal division. There are 10 divisions. Returns actually set value.
+        """
+        self.state.requested_time_scale = Duration.value_of(time_scale)
+        return self.__update_time_scale()
+
+    def __update_time_scale(self) -> Duration:
         num_samples_per_division = self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
-        requested_dt = requested_time_scale / num_samples_per_division
-        dt_s, downsample, downsamplemerging = find_downsample_parameters(requested_dt)
+        requested_dt = self.state.requested_time_scale / num_samples_per_division
+        dt_s, downsample, downsamplemerging = self.__find_downsample_parameters(requested_dt)
         self.state.dt_s = dt_s
         self.state.downsample = downsample
         self.state.downsamplemerging = downsamplemerging
-        self.comm.set_downsample(downsample=downsample, highres=True, downsample_merging=downsamplemerging)
+        self.__set_downsample()
         return Duration.value_of(f"{dt_s} s").optimize()
+
+    def __get_valid_downsamplemergin_values(self) -> list[int]:
+        if self.state.dotwochannel:
+            return BoardConsts.VALID_DOWNSAMPLEMERGIN_VALUES_TWO_CHANNELS
+        else:
+            return BoardConsts.VALID_DOWNSAMPLEMERGIN_VALUES_ONE_CHANNEL
+
+    def __find_downsample_parameters(self, requested_dt: Duration) -> tuple[float, int, int]:
+        requested_dt_s = requested_dt.to_float(TimeUnit.S)
+        dmv = self.__get_valid_downsamplemergin_values()
+        for downsample in range(32):
+            for downsamplemerging in dmv:
+                dt_s = BoardConsts.NATIVE_SAMPLE_PERIOD_S * downsamplemerging * pow(2, downsample)
+                if dt_s >= requested_dt_s:
+                    return dt_s, downsample, downsamplemerging
+        raise RuntimeError("Failed to find valid downsample parameters")
+
+    def set_highres_capture_mode(self, highres: bool) -> None:
+        self.state.highres = highres
+        self.__set_downsample()
+
+    def __set_downsample(self):
+        self.comm.set_downsample(
+            downsample=self.state.downsample,
+            highres=self.state.highres,
+            downsample_merging=self.state.downsamplemerging
+        )
 
     def force_arm_trigger(self, trigger_type: TriggerType) -> bool:
         return self.comm.force_arm_trigger(
@@ -191,29 +264,38 @@ class Board:
             expect_samples=self.state.expect_samples
         )
 
-    def set_timescale_s(self, time_per_division_s: float) -> None:
-        pass
-
     def set_trigger_props(
             self,
-            trigger_level: int,
+            trigger_level: float,
             trigger_delta: int,
             trigger_pos: float,
             tot: int,
             trigger_on_chanel: int
-    ) -> None:
+    ) -> float:
+        """
+        trigger_level: value in range from -1 to 1; change in step of 0.0078125
+        returns trigger level in voltage
+        """
         if trigger_pos < 0 or trigger_pos > 1:
             raise RuntimeError("Trigger position must be between 0 and 1.")
+        if trigger_level < -1 or trigger_level > 1:
+            raise RuntimeError("Trigger level must be between -1 and 1.")
+
+        t_level = int(min(max(128.0 * trigger_level + 127.0, 0.0), 255))
+        if (t_level + trigger_delta >= 256) or (t_level - trigger_delta) <= 0:
+            raise RuntimeError("Invalid combindation of trigger level and delta.")
 
         self.state.trigger_pos = trigger_pos
         self.comm.set_trigger_props(
-            trigger_level=trigger_level,
+            trigger_level=t_level,
             trigger_delta=trigger_delta,
             trigger_pos=self.state.absolute_trigger_pos,
             tot=tot,
             trigger_on_chanel=trigger_on_chanel
         )
         self.comm.set_prelength_to_take(self.state.absolute_trigger_pos + 4)
+        self.state.configured_trigger_level[trigger_on_chanel] = trigger_level
+        return self.state.configured_trigger_level_V[trigger_on_chanel]
 
     def wait_for_calibration_done(self):
         # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
@@ -228,9 +310,9 @@ class Board:
                 self.comm.get_boardin()
                 raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
 
-    def adf_reset(self):
+    def reset_adf(self):
         self.__adf4350(
-            freq=BoardConsts.SAMPLE_RATE_GHZ.value * 1000 / 2,
+            freq=BoardConsts.SAMPLE_RATE_GHZ * 1000 / 2,
             phase=None,
             themuxout=self.state.themuxoutV
         )
@@ -238,9 +320,9 @@ class Board:
         res = self.comm.get_boardin()
         if self.debug:
             if bit_asserted(res, 5):
-                print(f"Adf pll locked for board {self.board}")
+                print(f"Adf pll locked for board {self.board_num}")
             else:
-                print(f"Adf pll for board {self.board} not locked?")  # should be 1 if locked
+                print(f"Adf pll for board {self.board_num} not locked?")  # should be 1 if locked
 
     def __adf4350(
             self, freq: float, phase, r_counter=1, divided=FeedbackSelect.Divider, ref_doubler=False,
@@ -288,31 +370,21 @@ class Board:
             )
         self.comm.set_spi_mode(0)
 
-    def pllreset(self):
+    def reset_plls(self):
         self.comm.reset_plls()
         self.state.phasecs = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]  # reset counters
 
         # adjust phases (intentionally put to a place where the clockstr may be bad, it'll get adjusted
         # by 90 deg later, and then dropped to a good range)
-        n = self.state.pll_test_c2phase  # amount to adjust (+ or -)
+        n = self.state.pll_test_c0phase  # amount to adjust (+ or -)
         for i in range(abs(n)):
-            self.dophase(2, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c2, clkout
-
-        n = -1  # amount to adjust (+ or -)
-        for i in range(abs(n)):
-            self.dophase(3, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c3
-
-        n = 0  # amount to adjust (+ or -)
-        for i in range(abs(n)):
-            self.dophase(4, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c4
-
+            self.__dophase(0, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c0, clklvds
         self.state.plljustreset = 3  # get a few events
-        self.switchclock()
+        self.__switchclock()
 
-    def dophase(self, plloutnum: int, updown: bool, pllnum: int, quiet=False):
+    def __dophase(self, plloutnum: int, updown: bool, pllnum: int, quiet=False):
         # for 3rd byte, 000:all 001:M 010=2:C0 011=3:C1 100=4:C2 101=5:C3 110=6:C4
         # for 4th byte, 1 is up, 0 is down
-        print(">>>>>>>>>> dophase")
         self.comm.set_clk_phase_adjust(pll_num=pllnum, pll_out_num=plloutnum, up_down=updown)
         self.state.phasecs[pllnum][plloutnum] = self.state.phasecs[pllnum][plloutnum] + (1 if updown else -1)
 
@@ -320,24 +392,24 @@ class Board:
             print(
                 "phase for pllnum", pllnum,
                 "plloutnum", plloutnum,
-                "on board", self.board,
+                "on board", self.board_num,
                 "now", self.state.phasecs[pllnum][plloutnum]
             )
 
-    def switchclock(self):
+    def __switchclock(self):
         self.clockswitch(True)
         self.clockswitch(False)
 
     def clockswitch(self, quiet: bool):
         clockinfo = self.comm.clk_switch()
         if self.debug and not quiet:
-            print(f"Clockinfo for board {self.board} {clockinfo:08b}")
+            print(f"Clockinfo for board {self.board_num} {clockinfo:08b}")
             if bit_asserted(clockinfo, 1) and not bit_asserted(clockinfo, 3):
-                print(f"Board {self.board} locked to ext board")
+                print(f"Board {self.board_num} locked to ext board")
             else:
-                print(f"Board {self.board} locked to internal clock")
+                print(f"Board {self.board_num} locked to internal clock")
 
-    def setupboard(self):
+    def __setupboard(self):
         self.comm.set_fanon(True)
 
         self.comm.set_spi_mode(0)
@@ -361,7 +433,7 @@ class Board:
         self.comm.spi_command("LCTRL", 0x02, 0x04, 0x0a, False)  # use LSYNC_N (software), 2's complement
         # self.comm.spi_command("LCTRL", 0x02, 0x04, 0x08, False)  # use LSYNC_N (software), offset binary
 
-        self.swapinputs(doswap=False, insetup=True)
+        self.__swapinputs(doswap=False, insetup=True)
 
         # self.comm.spi_command("TAD", 0x02, 0xB7, 0x01, False)  # invert clk
         self.comm.spi_command("TAD", 0x02, 0xB7, 0x00, False)  # don't invert clk
@@ -440,12 +512,12 @@ class Board:
         self.comm.spi_command("DAC ref on", 0x38, 0xff, 0xff, False, cs=4)
         self.comm.spi_command("DAC gain 1", 0x02, 0xff, 0xff, False, cs=4)
         self.comm.set_spi_mode(0)
-        self.dooffset(chan=0, val=0, scaling=1, doswap=False)
-        self.dooffset(chan=1, val=0, scaling=1, doswap=False)
-        self.setgain(chan=0, value=0, doswap=False)
-        self.setgain(chan=1, value=0, doswap=False)
+        self.__dooffset(chan=0, val=0, scaling=1, doswap=False)
+        self.__dooffset(chan=1, val=0, scaling=1, doswap=False)
+        self.__setgain(chan=0, value=0, doswap=False)
+        self.__setgain(chan=1, value=0, doswap=False)
 
-    def swapinputs(self, doswap: bool, insetup: bool):
+    def __swapinputs(self, doswap: bool, insetup: bool):
         if not insetup:
             self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x00, False)  # disable LVDS interface
             self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, False)  # disable calibration
@@ -459,7 +531,28 @@ class Board:
             self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
             self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x01, False)  # enable LVDS interface
 
-    def dooffset(self, chan: int, val, scaling, doswap) -> bool:
+    def set_channel_offset_V(self, channel: int, offset_V: float) -> float:
+        saved_offset_value = self.state.requested_offset_V[channel]
+
+        self.state.requested_offset_V[channel] = offset_V
+        new_offset_value: float | None = self.__set_channel_offset(channel)
+        if new_offset_value is None:
+            self.state.requested_offset_V = saved_offset_value
+        else:
+            self.state.offset_V = new_offset_value
+        return self.state.offset_V
+
+    def __set_channel_offset(self, channel: int) -> float | None:
+        scaling = 1000 * self.state.dV[channel] / 160
+        n = int(self.state.requested_offset_V[channel] * 1000 / (1.5 * scaling))
+        actual_offset_V = 1.5 * scaling * n / 1000
+        scl = scaling / 10 if self.state.ten_x_probe else scaling
+        if self.__dooffset(chan=channel, val=n, scaling=scl, doswap=self.state.dooversample):
+            return actual_offset_V
+        else:
+            return None
+
+    def __dooffset(self, chan: int, val, scaling, doswap) -> bool:
         # if doswap: val= -val
         dacval = int((pow(2, 16) - 1) * (val * scaling / 2 + 500) / 1000)
         # print("dacval is", dacval,"and doswap is",doswap,"and val is",val)
@@ -473,20 +566,40 @@ class Board:
         else:
             return False
 
-    def setgain(self, *, chan: int, value: int, doswap: bool):
+    def __setgain(self, *, chan: int, value: int, doswap: bool):
         self.comm.set_spi_mode(0)
         # 00 to 20 is 26 to -6 dB, 0x1a is no gain
         if doswap: chan = (chan + 1) % 2
         if chan == 0: self.comm.spi_command("Amp Gain 0", 0x02, 0x00, 26 - value, False, cs=2, nbyte=2, quiet=True)
         if chan == 1: self.comm.spi_command("Amp Gain 1", 0x02, 0x00, 26 - value, False, cs=1, nbyte=2, quiet=True)
 
-    def setchanacdc(self, chan: int, ac: int, doswap: bool):
+    def __setchanacdc(self, chan: int, ac: int, doswap: bool):
         if doswap: chan = (chan + 1) % 2
         match chan:
             case 0:
                 self.comm.set_boardout(control_bit=1, value_bit=(0 if ac == 1 else 1))
             case 1:
                 self.comm.set_boardout(control_bit=5, value_bit=(0 if ac == 1 else 1))
+            case _:
+                raise RuntimeError(f"Invalid channel number {chan}")
+
+    def set_channel_coupling(self, channel: int, channel_coupling: ChannelCoupling) -> None:
+        chan = ((channel + 1) % 2) if self.state.dooversample else channel
+        match chan:
+            case 0:
+                self.comm.set_boardout(control_bit=1, value_bit=channel_coupling.value)
+            case 1:
+                self.comm.set_boardout(control_bit=5, value_bit=channel_coupling.value)
+            case _:
+                raise RuntimeError(f"Invalid channel number {chan}")
+
+    def set_channel_5x_attenuation(self, channel, att: bool):
+        chan = ((channel + 1) % 2) if self.state.dooversample else channel
+        match chan:
+            case 0:
+                self.comm.set_boardout(control_bit=2, value_bit=(1 if att else 0))
+            case 1:
+                self.comm.set_boardout(control_bit=6, value_bit=(1 if att else 0))
             case _:
                 raise RuntimeError(f"Invalid channel number {chan}")
 
@@ -498,7 +611,7 @@ class Board:
         self.comm.set_led((0x0f, 0x0f, 0x0f), (0x0f, 0x0f, 0x0f))
         self.comm.set_configured(False)
 
-    def downsample_merging_counter_triggered(self) -> int:
+    def __downsample_merging_counter_triggered(self) -> int:
         if self.state.downsamplemerging == 0:
             return 0
         else:
@@ -508,17 +621,7 @@ class Board:
             else:
                 return downsamplemergingcounter
 
-    def parse_waveform_data2(self, waveform_data: bytes) -> list[float]:
-        w = []
-        dlen = int(len(waveform_data) / 100)
-        for i in range(dlen):
-            a = waveform_data[(100 * i): (100 * (i + 1))]
-            for j in range(39, -1, -1):
-                _, v = bitstruct.unpack(">u4s12", bytes([a[2 * j + 1], a[2 * j]]))
-                w.append(v * self.state.yscale)
-        return w
-
-    def get_sample_triggered(self) -> int:
+    def __get_sample_triggered(self) -> int:
         b = self.comm.read_register(RegisterIndex.sample_triggered).to_bytes(4)
         sample_triggered = 19 - f"{b[1]:04b}{b[2]:08b}{b[3]:08b}".find("10")
         if sample_triggered > 19:
@@ -526,18 +629,18 @@ class Board:
         else:
             return sample_triggered
 
-    def get_waveform(self) -> Waveform:
-        sample_triggered = self.get_sample_triggered()
+    def get_waveforms(self) -> tuple[Waveform, Waveform | None]:
+        sample_triggered = self.__get_sample_triggered()
 
         if self.state.doeventcounter:
             new_event_counter = self.comm.get_eventconter()
             if new_event_counter != self.state.eventcounter + 1 and new_event_counter != 0:
                 # check event count, but account for rollover
                 print("Event counter not incremented by 1?", new_event_counter, self.state.eventcounter,
-                      " for board", self.board)
+                      " for board", self.board_num)
             self.state.eventcounter = new_event_counter
 
-        downsample_merging_counter_triggered = self.downsample_merging_counter_triggered()
+        downsample_merging_counter_triggered = self.__downsample_merging_counter_triggered()
         print(f"downsample_merging_counter_triggered = {downsample_merging_counter_triggered}")
 
         # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
@@ -549,17 +652,21 @@ class Board:
 
         rx_len = len(waveform_data)
         self.state.total_rx_len += rx_len
-        trace_1, trace_2 = self.parse_waveform_data(
+        trace_1, trace_2 = self.__parse_waveform_data(
             waveform_data, self.state.expect_samples, downsample_merging_counter_triggered, sample_triggered
         )
-        if self.state.dotwochannel:
-            raise RuntimeError()
-        else:
-            pos = self.state.absolute_trigger_pos * self.state.samples_per_row_per_waveform()
-            print(f"pos = {pos}")
-            return Waveform(self.state.dt_s, trace_1, pos, self.state.dV)
+        pos = self.state.absolute_trigger_pos * self.state.samples_per_row_per_waveform()
 
-    def parse_waveform_data(
+        if self.state.dotwochannel:
+            return (Waveform(self.state.dt_s, [v * self.state.dV[0] for v in trace_1], pos, self.state.dV[0],
+                             self.state.configured_trigger_level_V[0]),
+                    Waveform(self.state.dt_s, [v * self.state.dV[1] for v in trace_2], pos, self.state.dV[1],
+                             self.state.configured_trigger_level_V[1]))
+        else:
+            return Waveform(self.state.dt_s, [v * self.state.dV[0] for v in trace_1], pos, self.state.dV[0],
+                            self.state.configured_trigger_level_V[0]), None
+
+    def __parse_waveform_data(
             self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int
     ) -> tuple[list[float], list[float]]:
         nbadclkA = 0
@@ -641,26 +748,26 @@ class Board:
                         if samp >= (4 * 10 * expect_samples): continue
                         traces[0][samp] = val
 
-        self.adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
+        self.__adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
 
-        self.nbadclkA = nbadclkA
-        self.nbadclkB = nbadclkB
-        self.nbadclkC = nbadclkC
-        self.nbadclkD = nbadclkD
-        self.nbadstr = nbadstr
+        self.__nbadclkA = nbadclkA
+        self.__nbadclkB = nbadclkB
+        self.__nbadclkC = nbadclkC
+        self.__nbadclkD = nbadclkD
+        self.__nbadstr = nbadstr
 
         return traces
 
-    def adjustclocks(self, nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr):
-        if (nbadclkA + nbadclkB + nbadclkC + nbadclkD + nbadstr > 4) and self.state.phasecs[0][
-            2] < 20:  # adjust phase by 90 deg
-            n = 6  # amount to adjust clkout (positive)
-            for i in range(n): self.dophase(2, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clkout
+    def __adjustclocks(self, nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr):
+        if (nbadclkA + nbadclkB + nbadclkC + nbadclkD + nbadstr > 4) and self.state.phasecs[0][0] < 20:
+            # adjust phase by 90 deg
+            n = 6  # amount to adjust clklvds (positive)
+            for i in range(n): self.__dophase(0, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clklvds
         if self.state.plljustreset > 0: self.state.plljustreset -= 1  # count down while collecting events
         if self.state.plljustreset == 1:
             # adjust back down to a good range after detecting that it needs to be shifted by 90 deg or not
-            n = self.state.pll_test_c2phase_down  # amount to adjust clkout (negative)
-            for i in range(n): self.dophase(2, False, pllnum=0, quiet=(i != n - 1))  # adjust phase of clkout
+            n = self.state.pll_test_c0phase_down  # amount to adjust (positive)
+            for i in range(n): self.__dophase(0, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clklvds
 
     def force_data_acquisition(self) -> bool:
         n_tries = 20
@@ -706,6 +813,16 @@ class Board:
         """
         self.state.expect_samples = depth
 
+    def set_channel_input_impedance(self, channel: int, impedance: InputImpedance) -> None:
+        chan = ((channel + 1) % 2) if self.state.dooversample else channel
+        match chan:
+            case 0:
+                self.comm.set_boardout(0, impedance.value)
+            case 1:
+                self.comm.set_boardout(4, impedance.value)
+            case _:
+                raise RuntimeError("Channel must be 0 or 1.")
+
 
 def mk_board(connection: Connection, debug: bool, debug_spi: bool):
     return Board(connection, debug, debug_spi)
@@ -721,51 +838,55 @@ def connect(debug: bool = False, debug_spi: bool = False) -> list[Board]:
 
     return boards
 
+# if __name__ == '__main__z':
+#     # import numpy as np
+#     # import matplotlib.pyplot as plt
+#     # from matplotlib.animation import FuncAnimation
+#     #
+#     # fig, ax = plt.subplots()
+#     # xdata, ydata = [], []
+#     # ln, = ax.plot([], [], 'ro')
+#     #
+#     #
+#     # def init():
+#     #     ax.set_xlim(0, 2 * np.pi)
+#     #     ax.set_ylim(-1, 1)
+#     #     return ln,
+#     #
+#     #
+#     # def update(frame):
+#     #     xdata.append(frame)
+#     #     ydata.append(np.sin(frame))
+#     #     ln.set_data(xdata, ydata)
+#     #     return ln,
+#     #
+#     #
+#     # ani = FuncAnimation(fig, update, frames=np.linspace(0, 2 * np.pi, 128),
+#     #                     init_func=init, blit=True)
+#     # plt.show()
+#     #
+#     boards = connect(debug=True)
+#     print(boards[0].comm.get_version())
+#     #
+#     fig, ax = plt.subplots()
+#
+#
+#     def update(frame):
+#         for i in range(100):
+#             print(f"{i}")
+#             waveform: list[float] = boards[0].get_waveform()
+#             if waveform is not None:
+#                 ax.clear()
+#                 ax.plot(waveform)
+#                 fig.canvas.draw()
+#
+#
+#     anim = FuncAnimation(fig, update)
+#     plt.show()
+#     # hl[0].set_ydata(waveform)
+#     # time.sleep(1)
 
-if __name__ == '__main__z':
-    # import numpy as np
-    # import matplotlib.pyplot as plt
-    # from matplotlib.animation import FuncAnimation
-    #
-    # fig, ax = plt.subplots()
-    # xdata, ydata = [], []
-    # ln, = ax.plot([], [], 'ro')
-    #
-    #
-    # def init():
-    #     ax.set_xlim(0, 2 * np.pi)
-    #     ax.set_ylim(-1, 1)
-    #     return ln,
-    #
-    #
-    # def update(frame):
-    #     xdata.append(frame)
-    #     ydata.append(np.sin(frame))
-    #     ln.set_data(xdata, ydata)
-    #     return ln,
-    #
-    #
-    # ani = FuncAnimation(fig, update, frames=np.linspace(0, 2 * np.pi, 128),
-    #                     init_func=init, blit=True)
-    # plt.show()
-    #
-    boards = connect(debug=True)
-    print(boards[0].comm.get_version())
-    #
-    fig, ax = plt.subplots()
-
-
-    def update(frame):
-        for i in range(100):
-            print(f"{i}")
-            waveform: list[float] = boards[0].get_waveform()
-            if waveform is not None:
-                ax.clear()
-                ax.plot(waveform)
-                fig.canvas.draw()
-
-
-    anim = FuncAnimation(fig, update)
-    plt.show()
-    # hl[0].set_ydata(waveform)
-    # time.sleep(1)
+# Changed
+#   adjustclocks *
+#   pllreset
+#   adfreset

@@ -13,3 +13,4 @@ class RegisterIndex(IntEnum):
     downsamplemergingcounter_triggered = 8
     downsamplemerging = 9
     downsample = 10
+    highres = 11

@@ -186,7 +186,7 @@ class Commands:
             trigger_on_chanel: int
     ) -> None:
         self.conn.command([
-            8, trigger_level + 1, trigger_delta, int(trigger_pos / 256), trigger_pos % 256, tot, trigger_on_chanel, 100
+            8, trigger_level + 1, trigger_delta, int(trigger_pos / 256), trigger_pos % 256, tot, trigger_on_chanel, 0
         ])
 
     def set_downsample(self, downsample: int, highres: bool, downsample_merging: int) -> None:
