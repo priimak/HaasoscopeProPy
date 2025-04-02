@@ -1,4 +1,4 @@
-# HassOscopeProPy
+# HassoscopeProPy
 
 ## Preliminaries
 
