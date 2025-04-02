@@ -11,7 +11,8 @@ dependencies = [
     "PyQt5",
     "pyftdi",
     "ftd2xx",
-    "bitstruct"
+    "bitstruct",
+    "matplotlib"
 ]
 
 [build-system]
