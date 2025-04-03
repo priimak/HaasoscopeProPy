@@ -218,6 +218,19 @@ class Board:
         self.state.requested_time_scale = Duration.value_of(time_scale)
         return self.__update_time_scale()
 
+    def get_valid_time_scales(self) -> list[Duration]:
+        """
+        Returns list of valid durations for horizontal division. This is intended to be used
+        in GUI to construct valid time base element.
+        """
+        num_samples_per_division = self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
+        results = []
+        for downsample in range(32):
+            for downsamplemerging in self.__get_valid_downsamplemergin_values():
+                dt_s = BoardConsts.NATIVE_SAMPLE_PERIOD_S * downsamplemerging * pow(2, downsample)
+                results.append(Duration.value_of(f"{dt_s * num_samples_per_division} s").optimize())
+        return results
+
     def __update_time_scale(self) -> Duration:
         num_samples_per_division = self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
         requested_dt = self.state.requested_time_scale / num_samples_per_division
