@@ -1,5 +1,5 @@
 [project]
-name = "hassoscopepropy"
+name = "HaasoscopeProPy"
 dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
