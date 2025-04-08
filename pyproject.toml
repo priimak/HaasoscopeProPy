@@ -1,14 +1,18 @@
 [project]
 name = "HaasoscopeProPy"
 dynamic = ["version"]
-description = "Add your description here"
+description = "High level python API to HaasoscopePro"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
-    "PyQt5",
     "pyftdi",
     "ftd2xx",
     "bitstruct",
+]
+
+[project.optional-dependencies]
+mpl = [
+    "PyQt5",
     "matplotlib"
 ]
 
