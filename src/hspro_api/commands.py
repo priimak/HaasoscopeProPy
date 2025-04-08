@@ -4,9 +4,9 @@ from enum import Enum
 
 import bitstruct
 
-from hspro.conn.connection import Connection
-from hspro.registers_enum import RegisterIndex
-from hspro.utils import int_to_bytes, getbit
+from hspro_api.conn.connection import Connection
+from hspro_api.registers_enum import RegisterIndex
+from hspro_api.utils import int_to_bytes, getbit
 
 
 class TriggerType(Enum):

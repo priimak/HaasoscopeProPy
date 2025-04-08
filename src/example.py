@@ -1,7 +1,5 @@
-from hspro import InputImpedance
-from hspro.board import connect, WaveformAvailable, WaveformUnavailable, ChannelCoupling
-from hspro.commands import TriggerType
-from hspro.mpl_plotter import plot_waveforms
+from hspro_api import InputImpedance, connect, ChannelCoupling, WaveformAvailable, WaveformUnavailable, TriggerType
+from hspro_api.mpl_plotter import plot_waveforms
 
 if __name__ == '__main__':
     board = connect(debug=True)[0]

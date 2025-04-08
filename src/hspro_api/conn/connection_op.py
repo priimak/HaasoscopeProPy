@@ -1,10 +1,10 @@
 import ftd2xx
 from ftd2xx import FTD2XX
 
-from hspro.commands import Commands
-from hspro.conn.connection import Connection
-from hspro.conn.usb_connection import USBConnection
-from hspro.utils import ensure_list
+from hspro_api.commands import Commands
+from hspro_api.conn.connection import Connection
+from hspro_api.conn.usb_connection import USBConnection
+from hspro_api.utils import ensure_list
 
 
 def connect() -> list[Connection]:

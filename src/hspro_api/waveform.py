@@ -1,4 +1,4 @@
-from hspro.utils import TimeUnit, Duration
+from unlib import TimeUnit, Duration
 
 
 class Waveform:

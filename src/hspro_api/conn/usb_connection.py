@@ -1,6 +1,6 @@
 from ftd2xx import FTD2XX
 
-from hspro.conn.connection import Connection
+from hspro_api.conn.connection import Connection
 
 
 class USBConnection(Connection):

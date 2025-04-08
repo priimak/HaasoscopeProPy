@@ -3,14 +3,16 @@ from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 
-import hspro.conn.connection_op
-from hspro.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, PDPolarity, \
-    ClkDivMode
-from hspro.commands import Commands, TriggerType
-from hspro.conn.connection import Connection
-from hspro.registers_enum import RegisterIndex
-from hspro.utils import bit_asserted, int_to_bytes, Duration, TimeUnit
-from hspro.waveform import Waveform
+from unlib import Duration, TimeUnit
+
+import hspro_api.conn.connection_op
+from hspro_api.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, \
+    PDPolarity, ClkDivMode
+from hspro_api.commands import Commands, TriggerType
+from hspro_api.conn.connection import Connection
+from hspro_api.registers_enum import RegisterIndex
+from hspro_api.utils import bit_asserted, int_to_bytes
+from hspro_api.waveform import Waveform
 
 
 class WaveformAvailability(ABC):
@@ -843,7 +845,7 @@ def mk_board(connection: Connection, debug: bool, debug_spi: bool):
 
 def connect(debug: bool = False, debug_spi: bool = False) -> list[Board]:
     boards = []
-    for connection in hspro.conn.connection_op.connect():
+    for connection in hspro_api.conn.connection_op.connect():
         try:
             boards.append(mk_board(connection, debug, debug_spi))
         except Exception as ex:

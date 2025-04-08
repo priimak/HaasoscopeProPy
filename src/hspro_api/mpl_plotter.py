@@ -1,4 +1,4 @@
-from hspro.waveform import Waveform
+from hspro_api.waveform import Waveform
 
 
 def plot_waveforms(waveform_1: Waveform, waveform_2: Waveform | None) -> None:
