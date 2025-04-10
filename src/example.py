@@ -2,7 +2,7 @@ from hspro_api import InputImpedance, connect, ChannelCoupling, WaveformAvailabl
 from hspro_api.mpl_plotter import plot_waveforms
 
 if __name__ == '__main__':
-    board = connect(debug=True)[0]
+    board = connect(debug=False, show_board_call_trace=True)[0]
 
     board.enable_two_channels(False)
     board.set_channel_coupling(0, ChannelCoupling.DC)

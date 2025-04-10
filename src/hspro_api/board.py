@@ -2,6 +2,7 @@ import time
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable
 
 from unlib import Duration, TimeUnit
 
@@ -163,7 +164,14 @@ class BoardState:
 
 
 class Board:
-    def __init__(self, connection: Connection, debug: bool, debug_spi: bool):
+    def __init__(
+            self,
+            connection: Connection,
+            debug: bool,
+            debug_spi: bool,
+            board_trace: Callable[[str], None] = lambda _: None
+    ) -> None:
+        self.board_trace = board_trace
         self.comm = Commands(connection)
         self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
         self.board_num = connection.board
@@ -183,6 +191,7 @@ class Board:
         self.set_time_scale("200ns")
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> None:
+        self.board_trace(f"set_channel_10x_probe({channel}, {ten_x_probe})")
         if self.state.ten_x_probe[channel] != ten_x_probe:
             self.state.ten_x_probe[channel] = ten_x_probe
             self.__update_voltage_div(channel)
@@ -190,7 +199,9 @@ class Board:
     def set_chanel_voltage_div(self, channel: int, dV: float) -> float:
         self.state.requested_dV[channel] = dV
         self.__update_voltage_div(channel)
-        return self.state.dV[channel]
+        retval = self.state.dV[channel]
+        self.board_trace(f"set_chanel_voltage_div({channel}, {dV}) -> {retval}")
+        return retval
 
     def __update_voltage_div(self, channel: int) -> None:
         self.state.dV[channel] = self.comm.set_voltage_div(
@@ -201,6 +212,7 @@ class Board:
         )
 
     def enable_two_channels(self, enable: bool) -> None:
+        self.board_trace(f"enable_two_channels({enable})")
         if self.state.dotwochannel != enable:
             self.state.dotwochannel = enable
             self.__update_leds()
@@ -218,7 +230,9 @@ class Board:
         Set time duration per horizontal division. There are 10 divisions. Returns actually set value.
         """
         self.state.requested_time_scale = Duration.value_of(time_scale)
-        return self.__update_time_scale()
+        retval = self.__update_time_scale()
+        self.board_trace(f"set_time_scale({time_scale}) -> {retval}")
+        return retval
 
     def get_valid_time_scales(self) -> list[Duration]:
         """
@@ -260,6 +274,7 @@ class Board:
         raise RuntimeError("Failed to find valid downsample parameters")
 
     def set_highres_capture_mode(self, highres: bool) -> None:
+        self.board_trace(f"set_highres_capture_mode({highres})")
         self.state.highres = highres
         self.__set_downsample()
 
@@ -271,13 +286,15 @@ class Board:
         )
 
     def force_arm_trigger(self, trigger_type: TriggerType) -> bool:
-        return self.comm.force_arm_trigger(
+        retval = self.comm.force_arm_trigger(
             trigger_type=trigger_type,
             two_channels=self.state.dotwochannel,
             oversample=self.state.dooversample,
             absolute_trigger_pos=self.state.absolute_trigger_pos,
             expect_samples=self.state.expect_samples
         )
+        self.board_trace(f"force_arm_trigger({trigger_type}) -> {retval}")
+        return retval
 
     def set_trigger_props(
             self,
@@ -310,11 +327,17 @@ class Board:
         )
         self.comm.set_prelength_to_take(self.state.absolute_trigger_pos + 4)
         self.state.configured_trigger_level[trigger_on_chanel] = trigger_level
-        return self.state.configured_trigger_level_V[trigger_on_chanel]
+        retval = self.state.configured_trigger_level_V[trigger_on_chanel]
+        self.board_trace(
+            f"set_trigger_props({trigger_level}, {trigger_delta}, {trigger_pos}, "
+            f"{tot}, {trigger_on_chanel}) -> {retval}"
+        )
+        return retval
 
     def wait_for_calibration_done(self):
         # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
         # Raise error if calibration is not done within 1 second.
+        self.board_trace("wait_for_calibration_done()")
         start_at = time.time()
         while True:
             boardin = self.comm.read_register(RegisterIndex.boardin)
@@ -326,6 +349,7 @@ class Board:
                 raise RuntimeError("ADC calibration on the board did not complete within 3 seconds.")
 
     def reset_adf(self):
+        self.board_trace("reset_adf()")
         self.__adf4350(
             freq=BoardConsts.SAMPLE_RATE_GHZ * 1000 / 2,
             phase=None,
@@ -386,6 +410,7 @@ class Board:
         self.comm.set_spi_mode(0)
 
     def reset_plls(self):
+        self.board_trace("reset_plls()")
         self.comm.reset_plls()
         self.state.phasecs = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]  # reset counters
 
@@ -416,6 +441,7 @@ class Board:
         self.clockswitch(False)
 
     def clockswitch(self, quiet: bool):
+        self.board_trace("clockswitch()")
         clockinfo = self.comm.clk_switch()
         if self.debug and not quiet:
             print(f"Clockinfo for board {self.board_num} {clockinfo:08b}")
@@ -555,6 +581,8 @@ class Board:
             self.state.requested_offset_V = saved_offset_value
         else:
             self.state.offset_V = new_offset_value
+
+        self.board_trace(f"set_channel_offset_V({channel}, {offset_V}) -> {self.state.offset_V}")
         return self.state.offset_V
 
     def __set_channel_offset(self, channel: int) -> float | None:
@@ -599,6 +627,7 @@ class Board:
                 raise RuntimeError(f"Invalid channel number {chan}")
 
     def set_channel_coupling(self, channel: int, channel_coupling: ChannelCoupling) -> None:
+        self.board_trace(f"set_channel_coupling({channel}, {channel_coupling})")
         chan = ((channel + 1) % 2) if self.state.dooversample else channel
         match chan:
             case 0:
@@ -609,6 +638,7 @@ class Board:
                 raise RuntimeError(f"Invalid channel number {chan}")
 
     def set_channel_5x_attenuation(self, channel, att: bool):
+        self.board_trace(f"set_channel_5x_attenuation({channel}, {att})")
         chan = ((channel + 1) % 2) if self.state.dooversample else channel
         match chan:
             case 0:
@@ -619,6 +649,7 @@ class Board:
                 raise RuntimeError(f"Invalid channel number {chan}")
 
     def cleanup(self):
+        self.board_trace("cleanup()")
         self.comm.set_spi_mode(0)
         self.comm.spi_command("DEVICE_CONFIG", 0x00, 0x02, 0x03, False)  # power down
         self.comm.set_fanon(False)
@@ -656,7 +687,6 @@ class Board:
             self.state.eventcounter = new_event_counter
 
         downsample_merging_counter_triggered = self.__downsample_merging_counter_triggered()
-        print(f"downsample_merging_counter_triggered = {downsample_merging_counter_triggered}")
 
         # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
         expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
@@ -826,9 +856,11 @@ class Board:
         Set total number of data point blocks to capture. Each block is 40 points in single channel
         mode and 20 in double channel mode.
         """
+        self.board_trace(f"set_memory_depth({depth})")
         self.state.expect_samples = depth
 
     def set_channel_input_impedance(self, channel: int, impedance: InputImpedance) -> None:
+        self.board_trace(f"set_channel_input_impedance({channel}, {impedance})")
         chan = ((channel + 1) % 2) if self.state.dooversample else channel
         match chan:
             case 0:
@@ -839,15 +871,18 @@ class Board:
                 raise RuntimeError("Channel must be 0 or 1.")
 
 
-def mk_board(connection: Connection, debug: bool, debug_spi: bool):
-    return Board(connection, debug, debug_spi)
+def mk_board(connection: Connection, debug: bool, debug_spi: bool, show_board_call_trace: bool = False):
+    tracer = lambda _: None
+    if show_board_call_trace:
+        tracer = lambda s: print(s)
+    return Board(connection, debug, debug_spi, tracer)
 
 
-def connect(debug: bool = False, debug_spi: bool = False) -> list[Board]:
+def connect(debug: bool = False, debug_spi: bool = False, show_board_call_trace: bool = False) -> list[Board]:
     boards = []
-    for connection in hspro_api.conn.connection_op.connect():
+    for connection in hspro_api.conn.connection_op.connect(debug):
         try:
-            boards.append(mk_board(connection, debug, debug_spi))
+            boards.append(mk_board(connection, debug, debug_spi, show_board_call_trace))
         except Exception as ex:
             print(f"Failed to setup board: {ex}")
 

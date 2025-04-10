@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 
 
 class Connection(ABC):
-    def __init__(self, board_number: int):
+    def __init__(self, board_number: int, debug: bool):
         self.board = board_number
+        self.debug = debug
 
     @abstractmethod
     def send(self, payload: list[int]) -> int:
@@ -16,5 +17,6 @@ class Connection(ABC):
     def command(self, payload: list[int]) -> bytes:
         data = payload + ([0] * (8 - len(payload)))
         self.send(data)
-        print(f"command :: {data}")
+        if self.debug:
+            print(f"command :: {data}")
         return self.recv(4)

@@ -60,7 +60,8 @@ class Commands:
     def get_version(self) -> int:
         """ Return firmware version. """
         version = self.read_register(RegisterIndex.version)
-        print(f"version = {version}")
+        if self.debug:
+            print(f"version = {version}")
         return version
         # return int.from_bytes(self.conn.command([2, 0, 0, 0, 0, 0, 0, 0]), byteorder="little")
 
@@ -68,8 +69,8 @@ class Commands:
         """ TODO: Describe me """
         res = self.conn.command([2, 1, 0, 0, 0, 0, 0, 0])[0]
 
-        # if self.debug:
-        print(f"Board in bits: {res:08b}")
+        if self.debug:
+            print(f"Board in bits: {res:08b}")
 
         return res
 
@@ -204,7 +205,8 @@ class Commands:
     def is_capture_available(self) -> tuple[bool, int]:
         trigger_data = self.conn.command([12, 0, 0, 0, 0, 0, 0, 0])
         acqstate = trigger_data[0]
-        print(f"acqstate {acqstate} @ {time.time()}")
+        if self.debug:
+            print(f"acqstate {acqstate} @ {time.time()}")
         if acqstate == 251:  # an event is ready to be read out
             # print("board",board,"sample triggered", binprint(triggercounter[3]), binprint(triggercounter[2]), binprint(triggercounter[1]))
             gotzerobit = False
@@ -236,12 +238,14 @@ class Commands:
                 0
             ] + int_to_bytes(samples_after_trigger)  # length to take after trigger (bytes 4 and 5)
         )
-        print("trigger data", trigger_data)
+        if self.debug:
+            print("trigger data", trigger_data)
         return trigger_data[0] == 1
 
     def force_data_acquisition(self) -> int:
         response = self.conn.command([14, 0, 0, 0, 0, 0, 0, 0])
-        print(f"force_data_acquisition >>> {response[0]}")
+        if self.debug:
+            print(f"force_data_acquisition >>> {response[0]}")
         return response[0]
 
     def set_voltage_div(self, channel: int, dV: float, do_oversample: bool, ten_x_probe: bool) -> float:
@@ -275,12 +279,14 @@ class Commands:
         self.set_spi_mode(0)
 
         real_offset_V = (dacval / (pow(2, 16) - 1) - 0.5) * 2 * tx * A
-        print(f"set_offset_V {offsetV} -> {dacval} -> {real_offset_V}")
+        if self.debug:
+            print(f"set_offset_V {offsetV} -> {dacval} -> {real_offset_V}")
         return real_offset_V
 
     def read_register(self, reg: RegisterIndex) -> int:
         response = self.conn.command([14, reg.value, 0, 0, 0, 0, 0, 0])
-        print(f"read_register {reg} -> {response}")
+        if self.debug:
+            print(f"read_register {reg} -> {response}")
         match reg:
             case 0:  # ram_preoffset
                 _, v = bitstruct.unpack(">u6u10", bytes([response[1], response[0]]))

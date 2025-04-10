@@ -7,14 +7,14 @@ from hspro_api.conn.usb_connection import USBConnection
 from hspro_api.utils import ensure_list
 
 
-def connect() -> list[Connection]:
+def connect(debug: bool) -> list[Connection]:
     devices = []
     board_number = 1
     for device_serial_number in ensure_list(ftd2xx.listDevices()):
         if device_serial_number.startswith(b'FT'):
             usb: FTD2XX = ftd2xx.openEx(device_serial_number)
             if str(usb.description, "ASCII") == "HaasoscopePro USB2":
-                connection = USBConnection(usb, "FTX232H", board_number)
+                connection = USBConnection(usb, "FTX232H", board_number, debug)
 
                 # Something is off in our board; The first time it is powered on we get
                 # incorrect firmware version number one or two time. After that it works fine.

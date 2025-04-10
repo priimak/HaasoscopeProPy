@@ -4,8 +4,8 @@ from hspro_api.conn.connection import Connection
 
 
 class USBConnection(Connection):
-    def __init__(self, usb: FTD2XX, device_type: str, board_number: int):
-        super().__init__(board_number)
+    def __init__(self, usb: FTD2XX, device_type: str, board_number: int, debug: bool):
+        super().__init__(board_number, debug)
         self.device_type = device_type
         self.device_name = str(usb.description, "ASCII")
         self.serial = usb.serial
@@ -22,7 +22,8 @@ class USBConnection(Connection):
 
     def send(self, payload: list[int]) -> int:
         """ Send `payload` data to the device and return number of bytes sent. """
-        print("usb::send", ",".join(f"{b}" for b in payload))
+        if self.debug:
+            print("usb::send", ",".join(f"{b}" for b in payload))
         txlen = 0
         data = bytes(payload)
         for si in range(0, len(data), self._chunk):
@@ -44,9 +45,7 @@ class USBConnection(Connection):
             ei = min(ei, recv_len)
             chunk_len = ei - si
             av = self._usb.getQueueStatus()
-            print(f"av = {av} vs {recv_len} {chunk_len}")
             chunk = self._usb.read(chunk_len)
-            print(f"len(chunk) = {len(chunk)}")
             data += chunk
             if len(chunk) < chunk_len:
                 break
