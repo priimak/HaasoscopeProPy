@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from unlib import Duration
+from unlib import Duration, TimeUnit
 
 import hspro_api.conn.connection_op
 from hspro_api.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, \
@@ -268,7 +268,7 @@ class Board:
     def __find_downsample_parameters(self, requested_dt: Duration) -> tuple[float, int, int]:
         for v in (TimeConstants.dt_two_ch if self.state.dotwochannel else TimeConstants.dt_one_ch):
             if v[2] >= requested_dt:
-                return v[2], v[0], v[1]
+                return v[2].to_float(TimeUnit.S), v[0], v[1]
         raise RuntimeError("Failed to find valid downsample parameters")
 
     def set_highres_capture_mode(self, highres: bool) -> None:
