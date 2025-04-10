@@ -870,6 +870,9 @@ class Board:
             case _:
                 raise RuntimeError("Channel must be 0 or 1.")
 
+    def num_samples_per_division(self):
+        return self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
+
 
 def mk_board(connection: Connection, debug: bool, debug_spi: bool, show_board_call_trace: bool = False):
     tracer = lambda _: None
