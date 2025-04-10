@@ -830,6 +830,9 @@ class Board:
                 is_available, sample_triggered = self.comm.is_capture_available()
                 if is_available:
                     return WaveformAvailable(sample_triggered)
+                else:
+                    time.sleep(0.0125)  # 1/80 of a second
+
         elif timeout_s == 0:
             # a single try
             is_available, sample_triggered = self.comm.is_capture_available()
@@ -837,6 +840,7 @@ class Board:
                 return WaveformAvailable(sample_triggered)
             else:
                 return WaveformUnavailable()
+
         else:  # timeout_s > 0
             start_at_s = time.time()
             while time.time() <= start_at_s + timeout_s:
