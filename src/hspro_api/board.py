@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from unlib import Duration, TimeUnit
+from unlib import Duration
 
 import hspro_api.conn.connection_op
 from hspro_api.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, BandSelectClockMode, make_regs, \
@@ -12,6 +12,7 @@ from hspro_api.adf435x_core import FeedbackSelect, calculate_regs, DeviceType, B
 from hspro_api.commands import Commands, TriggerType
 from hspro_api.conn.connection import Connection
 from hspro_api.registers_enum import RegisterIndex
+from hspro_api.time_constants import TimeConstants
 from hspro_api.utils import bit_asserted, int_to_bytes
 from hspro_api.waveform import Waveform
 
@@ -239,6 +240,7 @@ class Board:
         Returns list of valid durations for horizontal division. This is intended to be used
         in GUI to construct valid time base element.
         """
+        # TODO: This function is to be removed
         num_samples_per_division = self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
         results = []
         for downsample in range(32):
@@ -264,13 +266,9 @@ class Board:
             return BoardConsts.VALID_DOWNSAMPLEMERGIN_VALUES_ONE_CHANNEL
 
     def __find_downsample_parameters(self, requested_dt: Duration) -> tuple[float, int, int]:
-        requested_dt_s = requested_dt.to_float(TimeUnit.S)
-        dmv = self.__get_valid_downsamplemergin_values()
-        for downsample in range(32):
-            for downsamplemerging in dmv:
-                dt_s = BoardConsts.NATIVE_SAMPLE_PERIOD_S * downsamplemerging * pow(2, downsample)
-                if dt_s >= requested_dt_s:
-                    return dt_s, downsample, downsamplemerging
+        for v in (TimeConstants.dt_two_ch if self.state.dotwochannel else TimeConstants.dt_one_ch):
+            if v[2] >= requested_dt:
+                return v[2], v[0], v[1]
         raise RuntimeError("Failed to find valid downsample parameters")
 
     def set_highres_capture_mode(self, highres: bool) -> None:
