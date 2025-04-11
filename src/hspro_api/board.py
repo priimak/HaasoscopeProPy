@@ -699,13 +699,15 @@ class Board:
         pos = self.state.absolute_trigger_pos * self.state.samples_per_row_per_waveform()
 
         if self.state.dotwochannel:
-            return (Waveform(self.state.dt_s, [v * self.state.dV[0] for v in trace_1], pos, self.state.dV[0],
-                             self.state.configured_trigger_level_V[0]),
-                    Waveform(self.state.dt_s, [v * self.state.dV[1] for v in trace_2], pos, self.state.dV[1],
-                             self.state.configured_trigger_level_V[1]))
+            return (
+                Waveform(self.state.dt_s, trace_1, pos, self.state.dV[0], self.state.configured_trigger_level_V[0]),
+                Waveform(self.state.dt_s, trace_2, pos, self.state.dV[1], self.state.configured_trigger_level_V[1])
+            )
         else:
-            return Waveform(self.state.dt_s, [v * self.state.dV[0] for v in trace_1], pos, self.state.dV[0],
-                            self.state.configured_trigger_level_V[0]), None
+            return (
+                Waveform(self.state.dt_s, trace_1, pos, self.state.dV[0], self.state.configured_trigger_level_V[0]),
+                None
+            )
 
     def __parse_waveform_data(
             self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int
