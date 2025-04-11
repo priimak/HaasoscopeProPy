@@ -6,11 +6,12 @@ if __name__ == '__main__':
 
     board.enable_two_channels(False)
     board.set_channel_coupling(0, ChannelCoupling.DC)
-    board.set_trigger_props(trigger_level=0, trigger_delta=1, trigger_pos=0.75, tot=3, trigger_on_chanel=0)
+    board.set_trigger_props(trigger_level=0, trigger_delta=1, trigger_pos=0.75, tot=3, trigger_on_channel=0)
     board.set_channel_10x_probe(channel=0, ten_x_probe=False)
-    board.set_chanel_voltage_div(channel=0, dV=0.6)
+    dV = board.set_channel_voltage_div(channel=0, dV=0.6)
+    print(f"dV set to {dV}")
     board.set_time_scale("10us")
-    board.set_channel_input_impedance(channel=0, impedance=InputImpedance.ONE_MEGA_OHM)
+    board.set_channel_input_impedance(channel=0, impedance=InputImpedance.FIFTY_OHM)
 
     for i in range(10):
         # board.set_channel_offset_V(channel=0, offset_V=0.15 * i)

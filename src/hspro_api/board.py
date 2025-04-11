@@ -182,7 +182,7 @@ class Board:
         self.debug_spi = debug_spi
 
         # configure the board
-        self.cleanup()
+        # self.cleanup()
         self.reset_adf()
         self.reset_plls()
         self.__setupboard()
@@ -197,11 +197,11 @@ class Board:
             self.state.ten_x_probe[channel] = ten_x_probe
             self.__update_voltage_div(channel)
 
-    def set_chanel_voltage_div(self, channel: int, dV: float) -> float:
+    def set_channel_voltage_div(self, channel: int, dV: float) -> float:
         self.state.requested_dV[channel] = dV
         self.__update_voltage_div(channel)
         retval = self.state.dV[channel]
-        self.board_trace(f"set_chanel_voltage_div({channel}, {dV}) -> {retval}")
+        self.board_trace(f"set_channel_voltage_div({channel}, {dV}) -> {retval}")
         return retval
 
     def __update_voltage_div(self, channel: int) -> None:
@@ -300,7 +300,7 @@ class Board:
             trigger_delta: int,
             trigger_pos: float,
             tot: int,
-            trigger_on_chanel: int
+            trigger_on_channel: int
     ) -> float:
         """
         trigger_level: value in range from -1 to 1; change in step of 0.0078125
@@ -321,14 +321,14 @@ class Board:
             trigger_delta=trigger_delta,
             trigger_pos=self.state.absolute_trigger_pos,
             tot=tot,
-            trigger_on_chanel=trigger_on_chanel
+            trigger_on_channel=trigger_on_channel
         )
         self.comm.set_prelength_to_take(self.state.absolute_trigger_pos + 4)
-        self.state.configured_trigger_level[trigger_on_chanel] = trigger_level
-        retval = self.state.configured_trigger_level_V[trigger_on_chanel]
+        self.state.configured_trigger_level[trigger_on_channel] = trigger_level
+        retval = self.state.configured_trigger_level_V[trigger_on_channel]
         self.board_trace(
             f"set_trigger_props({trigger_level}, {trigger_delta}, {trigger_pos}, "
-            f"{tot}, {trigger_on_chanel}) -> {retval}"
+            f"{tot}, {trigger_on_channel}) -> {retval}"
         )
         return retval
 
@@ -532,8 +532,8 @@ class Board:
             self.comm.spi_command("PAT_SEL", 0x02, 0x05, 0x02, False)  # normal ADC data
             self.comm.spi_command("UPAT_CTRL", 0x01, 0x90, 0x1e, False)  # set lane pattern to default
 
-        self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
-        self.wait_for_calibration_done()
+        # self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
+        # self.wait_for_calibration_done()
 
         self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x01, False)  # enable LVDS interface
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x00, False)  # assert ~sync signal
