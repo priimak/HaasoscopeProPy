@@ -41,3 +41,4 @@ from the terminal like so:
 ```shell
 uv run --directory src example.py
 ```
+
