@@ -174,7 +174,7 @@ class Board:
     ) -> None:
         self.board_trace = board_trace
         self.comm = Commands(connection)
-        self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
+        # self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
         self.board_num = connection.board
         self.state = BoardState()
 
@@ -188,8 +188,6 @@ class Board:
         self.__setupboard()
         for c in range(BoardConsts.NUM_CHAN_PER_BOARD):
             self.__setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
-        self.comm.set_rolling(False)
-        self.set_time_scale("200ns")
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> None:
         self.board_trace(f"set_channel_10x_probe({channel}, {ten_x_probe})")
@@ -532,14 +530,14 @@ class Board:
             self.comm.spi_command("PAT_SEL", 0x02, 0x05, 0x02, False)  # normal ADC data
             self.comm.spi_command("UPAT_CTRL", 0x01, 0x90, 0x1e, False)  # set lane pattern to default
 
-        # self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
+        self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x01, False)  # enable calibration
         # self.wait_for_calibration_done()
 
         self.comm.spi_command("LVDS_EN", 0x02, 0x00, 0x01, False)  # enable LVDS interface
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x00, False)  # assert ~sync signal
         self.comm.spi_command("LSYNC_N", 0x02, 0x03, 0x01, False)  # deassert ~sync signal
-        self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x00, False)
-        self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x01, False)
+        # self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x00, False)
+        # self.comm.spi_command("CAL_SOFT_TRIG", 0x00, 0x6c, 0x01, False)
 
         self.comm.set_spi_mode(0)
         self.comm.spi_command("Amp Rev ID", 0x00, 0x00, 0x00, True, cs=1, nbyte=2)

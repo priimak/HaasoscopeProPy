@@ -11,7 +11,7 @@ if __name__ == '__main__':
     dV = board.set_channel_voltage_div(channel=0, dV=0.6)
     print(f"dV set to {dV}")
     board.set_time_scale("10us")
-    board.set_channel_input_impedance(channel=0, impedance=InputImpedance.FIFTY_OHM)
+    board.set_channel_input_impedance(channel=0, impedance=InputImpedance.ONE_MEGA_OHM)
 
     for i in range(10):
         # board.set_channel_offset_V(channel=0, offset_V=0.15 * i)
