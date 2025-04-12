@@ -314,6 +314,7 @@ class Board:
             raise RuntimeError("Invalid combindation of trigger level and delta.")
 
         self.state.trigger_pos = trigger_pos
+        self.state.trigger_pos = self.state.absolute_trigger_pos / self.state.expect_samples
         self.comm.set_trigger_props(
             trigger_level=t_level,
             trigger_delta=trigger_delta,
