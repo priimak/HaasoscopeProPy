@@ -302,7 +302,7 @@ class Board:
     ) -> float:
         """
         trigger_level: value in range from -1 to 1; change in step of 0.0078125
-        returns trigger level in voltage
+        returns configured trigger level
         """
         if trigger_pos < 0 or trigger_pos > 1:
             raise RuntimeError("Trigger position must be between 0 and 1.")
@@ -324,12 +324,12 @@ class Board:
         )
         self.comm.set_prelength_to_take(self.state.absolute_trigger_pos + 4)
         self.state.configured_trigger_level[trigger_on_channel] = trigger_level
-        retval = self.state.configured_trigger_level_V[trigger_on_channel]
+        configured_level = (t_level - 127.0) / 128.0
         self.board_trace(
             f"set_trigger_props({trigger_level}, {trigger_delta}, {trigger_pos}, "
-            f"{tot}, {trigger_on_channel}) -> {retval}"
+            f"{tot}, {trigger_on_channel}) -> {configured_level}"
         )
-        return retval
+        return configured_level
 
     def wait_for_calibration_done(self):
         # Poll for ADC calibration to be complete. This is reflected in bit 7 or `boardin` register.
