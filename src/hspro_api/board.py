@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
+import numpy as np
 from unlib import Duration, TimeUnit
 
 import hspro_api.conn.connection_op
@@ -727,6 +728,9 @@ class Board:
         traces: tuple[list[float], list[float]] = trace_A, trace_B
 
         unpackedsamples = struct.unpack('<' + 'h' * (len(data) // 2), data)
+        npunpackedsamples = np.array(unpackedsamples, dtype='float')
+        npunpackedsamples *= self.state.yscale
+
         downsampleoffset = 2 * (
                 sample_triggered + (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
         ) // self.state.downsamplemerging
@@ -736,34 +740,48 @@ class Board:
         datasize = 10 * self.state.expect_samples * (2 if self.state.dotwochannel else 4)
 
         for s in range(0, expect_samples + self.state.expect_samples_extra):
-            for n in range(self.state.nsubsamples):  # the subsample to get
-                # this will be 16x larger than the 12 bit value, since it's shifted 4 bits to the left
-                val = unpackedsamples[s * self.state.nsubsamples + n]
-                if 40 <= n < 44:
+            vals = unpackedsamples[s * self.state.nsubsamples + 40:s * self.state.nsubsamples + 48]
+            for n in range(0, 8):  # the subsample to get
+                val = vals[n]
+                if n < 4:
                     if val != 341 and val != 682:  # 0101010101 or 1010101010
-                        if n == 40: nbadclkA += 1
-                        if n == 41: nbadclkB += 1
-                        if n == 42: nbadclkC += 1
-                        if n == 43: nbadclkD += 1
+                        if n == 0: nbadclkA += 1
+                        if n == 1: nbadclkB += 1
+                        if n == 2: nbadclkC += 1
+                        if n == 3: nbadclkD += 1
                         # print("s=", s, "n=", n, "clk", val, binprint(val))
                     else:
                         self.lastclk = val
-                if 44 <= n < 48:
+                else:
                     if val != 0 and val != 1 and val != 2 and val != 4 and val != 8 and val != 16 and val != 32 and val != 64 and val != 128 and val != 256 and val != 512:  # 10 bits long, and just one 1
                         nbadstr = nbadstr + 1
                         # print("s=", s, "n=", n, "str", val, binprint(val))
-                if n < 40:
-                    val = val * self.state.yscale
-                    if self.state.dotwochannel:
-                        samp = s * 20 + n - downsampleoffset
-                        if n >= 20: samp -= 20
-                        if 0 < samp < datasize:
-                            ch = 1 if n < 20 else 0
-                            traces[ch][samp] = val
-                    else:
-                        samp = s * 40 + n - downsampleoffset
-                        if 0 < samp < datasize:
-                            traces[0][samp] = val
+            if self.state.dotwochannel:
+                samp = s * 20 - downsampleoffset
+                nsamp = 20
+                if samp < 0:
+                    nsamp = 20 + samp
+                    samp = 0
+                if samp + 20 >= datasize:
+                    nsamp = datasize - samp
+                if 0 < nsamp <= 20:
+                    # ch = 1 if n < 20 else 0
+                    traces[0][samp:samp + nsamp] = npunpackedsamples[
+                                                   s * self.state.nsubsamples + 20:s * self.state.nsubsamples + 20 + nsamp]
+
+                    traces[1][samp:samp + nsamp] = npunpackedsamples[
+                                                   s * self.state.nsubsamples:s * self.state.nsubsamples + nsamp]
+            else:
+                samp = s * 40 - downsampleoffset
+                nsamp = 40
+                if samp < 0:
+                    nsamp = 40 + samp
+                    samp = 0
+                if samp + 40 >= datasize:
+                    nsamp = datasize - samp
+                if 0 < nsamp <= 40:
+                    traces[0][samp:samp + nsamp] = npunpackedsamples[
+                                                   s * self.state.nsubsamples:s * self.state.nsubsamples + nsamp]
 
         self.__adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
 

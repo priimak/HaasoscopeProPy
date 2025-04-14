@@ -313,6 +313,10 @@ class Commands:
                 return response[0]
             case RegisterIndex.downsample:  # downsample
                 return response[0]
+            case RegisterIndex.highres:
+                return response[0]
+            case RegisterIndex.upperthresh:
+                return int.from_bytes(response, byteorder="little")
             case _:
                 raise RuntimeError(f"Unknown register index {reg}")
 
