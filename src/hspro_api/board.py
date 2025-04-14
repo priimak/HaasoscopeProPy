@@ -81,6 +81,7 @@ class BoardState:
     toff = 0
     themuxoutV = True
     phasecs = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
+    lastclk = -1
 
     pll_test_c2phase = 5
     pll_test_c2phase_down = 2
@@ -740,20 +741,22 @@ class Board:
         datasize = 10 * self.state.expect_samples * (2 if self.state.dotwochannel else 4)
 
         for s in range(0, expect_samples + self.state.expect_samples_extra):
-            vals = unpackedsamples[s * self.state.nsubsamples + 40:s * self.state.nsubsamples + 48]
-            for n in range(0, 8):  # the subsample to get
-                val = vals[n]
-                if n < 4:
-                    if val != 341 and val != 682:  # 0101010101 or 1010101010
-                        if n == 0: nbadclkA += 1
-                        if n == 1: nbadclkB += 1
-                        if n == 2: nbadclkC += 1
-                        if n == 3: nbadclkD += 1
-                        # print("s=", s, "n=", n, "clk", val, binprint(val))
-                    else:
-                        self.lastclk = val
-                else:
-                    if val != 0 and val != 1 and val != 2 and val != 4 and val != 8 and val != 16 and val != 32 and val != 64 and val != 128 and val != 256 and val != 512:  # 10 bits long, and just one 1
+            vals = unpackedsamples[s * self.state.nsubsamples + 40:s * self.state.nsubsamples + 50]
+            if vals[9] != -16657: print("no beef?")  # -16657 is 0xbeef
+            if vals[8] != 0 or (self.state.lastclk != 341 and self.state.lastclk != 682):
+                # only bother checking if there was a clkstr problem detected in firmware, or we need to decode 
+                # because of a previous clkstr prob and now want to update self.lastclk
+                for n in range(0, 8):  # the subsample to get
+                    val = vals[n]
+                    if n < 4:
+                        if val != 341 and val != 682:  # 0101010101 or 1010101010
+                            if n == 0: nbadclkA += 1
+                            if n == 1: nbadclkB += 1
+                            if n == 2: nbadclkC += 1
+                            if n == 3: nbadclkD += 1
+                            # print("s=", s, "n=", n, "clk", val, binprint(val))
+                        self.state.lastclk = val
+                    elif val not in {0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512}:
                         nbadstr = nbadstr + 1
                         # print("s=", s, "n=", n, "str", val, binprint(val))
             if self.state.dotwochannel:
