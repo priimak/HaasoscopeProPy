@@ -1,3 +1,4 @@
+import struct
 import time
 from abc import ABC
 from dataclasses import dataclass
@@ -95,7 +96,7 @@ class BoardState:
     xscaling = 1
 
     # this is the size of 1 bit, so that 2^12 bits fill the 10.x divisions on the screen
-    yscale = 3.3 / 2.03 * 10 * 5 / 8 / pow(2, 12)
+    yscale = 3.3 / 2.03 * 10 * 5 / 8 / pow(2, 12) / 16
     requested_dV = [1.0, 1.0]
     dV = [1.0, 1.0]
     requested_offset_V = [0.0, 0.0]  # requested voltage offset per channel
@@ -725,72 +726,44 @@ class Board:
         trace_B = [0] * (two_channel_trace_len if self.state.dotwochannel else 0)
         traces: tuple[list[float], list[float]] = trace_A, trace_B
 
+        unpackedsamples = struct.unpack('<' + 'h' * (len(data) // 2), data)
+        downsampleoffset = 2 * (
+                sample_triggered + (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
+        ) // self.state.downsamplemerging
+        if not self.state.dotwochannel: downsampleoffset *= 2
+        # if self.doexttrig[board]: downsampleoffset -= self.toff // self.downsamplefactor
+        # datasize = self.xydata[board][1].size
+        datasize = 10 * self.state.expect_samples * (2 if self.state.dotwochannel else 4)
+
         for s in range(0, expect_samples + self.state.expect_samples_extra):
-            subsamples = data[self.state.nsubsamples * 2 * s: self.state.nsubsamples * 2 * (s + 1)]
             for n in range(self.state.nsubsamples):  # the subsample to get
-                pbyte = 2 * n
-                lowbits = subsamples[pbyte + 0]
-                highbits = subsamples[pbyte + 1]
-                if n < 40 and highbits >= 8:  # getbit(highbits, 3):
-                    highbits = (highbits - 16) * 256
-                else:
-                    highbits = highbits * 256
-                val = highbits + lowbits
-                chan = int(n / 10)
-
-                if n == 40 and val & 0x5555 != 4369 and val & 0x5555 != 17476:
-                    nbadclkA = nbadclkA + 1
-                elif n == 41 and val & 0x5555 != 1 and val & 0x5555 != 4:
-                    nbadclkA = nbadclkA + 1
-                elif n == 42 and val & 0x5555 != 4369 and val & 0x5555 != 17476:
-                    nbadclkB = nbadclkB + 1
-                elif n == 43 and val & 0x5555 != 1 and val & 0x5555 != 4:
-                    nbadclkB = nbadclkB + 1
-                elif n == 44 and val & 0x5555 != 4369 and val & 0x5555 != 17476:
-                    nbadclkC = nbadclkC + 1
-                elif n == 45 and val & 0x5555 != 1 and val & 0x5555 != 4:
-                    nbadclkC = nbadclkC + 1
-                elif n == 46 and val & 0x5555 != 4369 and val & 0x5555 != 17476:
-                    nbadclkD = nbadclkD + 1
-                elif n == 47 and val & 0x5555 != 1 and val & 0x5555 != 4:
-                    nbadclkD = nbadclkD + 1
-                # if 40<=n<48 and nbadclkD:
-                #    print("s=", s, "n=", n, "pbyte=", pbyte, "chan=", chan, binprint(data[pbyte + 1]), binprint(data[pbyte + 0]), val)
-
-                if 40 <= n < 48:
-                    strobe = val & 0xaaaa
-                    if strobe != 0:
-                        if strobe != 8 and strobe != 128 and strobe != 2048 and strobe != 32768:
-                            if strobe * 4 != 8 and strobe * 4 != 128 and strobe * 4 != 2048 and strobe * 4 != 32768:
-                                nbadstr = nbadstr + 1
+                # this will be 16x larger than the 12 bit value, since it's shifted 4 bits to the left
+                val = unpackedsamples[s * self.state.nsubsamples + n]
+                if 40 <= n < 44:
+                    if val != 341 and val != 682:  # 0101010101 or 1010101010
+                        if n == 40: nbadclkA += 1
+                        if n == 41: nbadclkB += 1
+                        if n == 42: nbadclkC += 1
+                        if n == 43: nbadclkD += 1
+                        # print("s=", s, "n=", n, "clk", val, binprint(val))
+                    else:
+                        self.lastclk = val
+                if 44 <= n < 48:
+                    if val != 0 and val != 1 and val != 2 and val != 4 and val != 8 and val != 16 and val != 32 and val != 64 and val != 128 and val != 256 and val != 512:  # 10 bits long, and just one 1
+                        nbadstr = nbadstr + 1
+                        # print("s=", s, "n=", n, "str", val, binprint(val))
                 if n < 40:
                     val = val * self.state.yscale
-                    if self.state.dooversample:
-                        val += self.state.extrigboardmeancorrection
-                        val *= self.state.extrigboardstdcorrection
                     if self.state.dotwochannel:
-                        samp = s * 20 + 19 - n % 10 - int(chan / 2) * 10
-                        samp = samp - int(
-                            2 * (
-                                    sample_triggered +
-                                    (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
-                            ) / self.state.downsamplemerging
-                        )
-                        # if self.doexttrig[board]: samp = samp + int(self.toff / self.downsamplefactor)
-                        if samp >= (2 * 10 * expect_samples): continue
-                        ch = chan % 2
-                        traces[ch][samp] = val
+                        samp = s * 20 + n - downsampleoffset
+                        if n >= 20: samp -= 20
+                        if 0 < samp < datasize:
+                            ch = 1 if n < 20 else 0
+                            traces[ch][samp] = val
                     else:
-                        samp = s * 40 + 39 - n
-                        samp = samp - int(
-                            4 * (
-                                    sample_triggered +
-                                    (downsample_merging_counter - 1) % self.state.downsamplemerging * 10
-                            ) / self.state.downsamplemerging
-                        )
-                        # if self.doexttrig[board]: samp = samp + int(self.toff / self.downsamplefactor)
-                        if samp >= (4 * 10 * expect_samples): continue
-                        traces[0][samp] = val
+                        samp = s * 40 + n - downsampleoffset
+                        if 0 < samp < datasize:
+                            traces[0][samp] = val
 
         self.__adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
 
