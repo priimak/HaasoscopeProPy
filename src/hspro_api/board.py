@@ -147,7 +147,7 @@ class BoardState:
     plljustreset = 0
     dooversample = False
     doresamp = 0
-    trigger_pos: float = 0.5
+    _trigger_pos: float = 0.5
     dt_s: float = BoardConsts.NATIVE_SAMPLE_PERIOD_S
     requested_time_scale: Duration | None = None
 
@@ -155,8 +155,20 @@ class BoardState:
         return 20 if self.dotwochannel else 40
 
     @property
+    def trigger_pos(self) -> float:
+        return self._trigger_pos
+
+    @trigger_pos.setter
+    def trigger_pos(self, trigger_pos: float) -> None:
+        self._trigger_pos = int(self.expect_samples * trigger_pos) / self.expect_samples
+
+    @property
+    def trigger_pos_live(self) -> float:
+        return self.trigger_pos + 1 / self.expect_samples
+
+    @property
     def absolute_trigger_pos(self) -> int:
-        return int(self.expect_samples * self.trigger_pos)
+        return round(self.expect_samples * self.trigger_pos)
 
     @property
     def max_x(self) -> float:
