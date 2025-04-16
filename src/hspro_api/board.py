@@ -590,7 +590,7 @@ class Board:
         self.state.requested_offset_V[channel] = offset_V
         new_offset_value: float | None = self.__set_channel_offset(channel)
         if new_offset_value is None:
-            self.state.requested_offset_V = saved_offset_value
+            self.state.requested_offset_V[channel] = saved_offset_value
         else:
             self.state.offset_V = new_offset_value
 
@@ -601,7 +601,7 @@ class Board:
         scaling = 1000 * self.state.dV[channel] / 160
         n = int(self.state.requested_offset_V[channel] * 1000 / (1.5 * scaling))
         actual_offset_V = 1.5 * scaling * n / 1000
-        scl = scaling / 10 if self.state.ten_x_probe else scaling
+        scl = scaling / 10 if self.state.ten_x_probe[channel] else scaling
         if self.__dooffset(chan=channel, val=n, scaling=scl, doswap=self.state.dooversample):
             return actual_offset_V
         else:
