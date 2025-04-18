@@ -204,11 +204,25 @@ class Board:
         for c in range(BoardConsts.NUM_CHAN_PER_BOARD):
             self.__setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
 
-    def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> None:
-        self.board_trace(f"set_channel_10x_probe({channel}, {ten_x_probe})")
+    def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
+        """
+        Set flag on a channel indicating if it is connected to 10x probe. Since this affects voltage/div value,
+        new voltage/div value is returned.
+        """
         if self.state.ten_x_probe[channel] != ten_x_probe:
             self.state.ten_x_probe[channel] = ten_x_probe
+            if ten_x_probe:
+                self.state.requested_dV[channel] = self.state.dV[channel] * 10
+            else:
+                self.state.requested_dV[channel] = self.state.dV[channel] / 10
             self.__update_voltage_div(channel)
+            self.set_channel_offset_V(channel, self.state.offset_V[channel])
+            retval = self.state.dV[channel]
+            self.board_trace(f"set_channel_10x_probe({channel}, {ten_x_probe}) -> {retval}")
+            return retval
+        else:
+            self.board_trace(f"set_channel_10x_probe({channel}, {ten_x_probe}) -> 0")
+            return 0.0
 
     def set_channel_voltage_div(self, channel: int, dV: float) -> float:
         self.state.requested_dV[channel] = dV
@@ -592,10 +606,10 @@ class Board:
         if new_offset_value is None:
             self.state.requested_offset_V[channel] = saved_offset_value
         else:
-            self.state.offset_V = new_offset_value
+            self.state.offset_V[channel] = new_offset_value
 
-        self.board_trace(f"set_channel_offset_V({channel}, {offset_V}) -> {self.state.offset_V}")
-        return self.state.offset_V
+        self.board_trace(f"set_channel_offset_V({channel}, {offset_V}) -> {self.state.offset_V[channel]}")
+        return self.state.offset_V[channel]
 
     def __set_channel_offset(self, channel: int) -> float | None:
         scaling = 1000 * self.state.dV[channel] / 160
