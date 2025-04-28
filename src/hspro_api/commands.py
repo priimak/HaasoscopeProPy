@@ -82,6 +82,9 @@ class Commands:
         """ TODO: Describe me """
         return int.from_bytes(self.conn.command([2, 3, 0, 0, 0, 0, 0, 0]), byteorder="little")
 
+    def clkout_ena(self, enable: bool) -> None:
+        self.conn.command([2, 9, (1 if enable else 0), 0, 99, 99, 99, 99])  # turn on/off lvdsout_clk
+
     def get_downsample_merging_counter_triggered(self) -> tuple[int, int]:
         """ TODO: Describe me """
         results = self.conn.command([2, 4, 0, 0, 0, 0, 0, 0])

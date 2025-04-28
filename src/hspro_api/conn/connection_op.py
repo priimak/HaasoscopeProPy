@@ -1,3 +1,5 @@
+import time
+
 import ftd2xx
 from ftd2xx import FTD2XX
 
@@ -29,6 +31,12 @@ def connect(debug: bool) -> list[Connection]:
                 board_number = board_number + 1
             else:
                 usb.close()
+    if len(devices) > 1:
+        # turn on lvdsout_clk for boards
+        for device in devices:
+            Commands(device).clkout_ena(True)
+
+        time.sleep(0.1)  # wait for clocks to lock
 
     # TODO: Add code link multiple boards together and reorder list of these boards with first one being the one that
     # TODO: will drive clocks of all other boards.

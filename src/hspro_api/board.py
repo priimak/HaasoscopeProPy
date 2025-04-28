@@ -682,7 +682,7 @@ class Board:
                 self.comm.set_boardout(control_bit=5, value_bit=channel_coupling.value)
             case _:
                 raise RuntimeError(f"Invalid channel number {chan}")
-        self.state.coupling = channel_coupling
+        self.state.coupling[channel] = channel_coupling
 
         # changing coupling changes offset scaling factors and thus require us to set channel offset again
         self.__set_channel_offset(channel)
