@@ -82,6 +82,10 @@ class Commands:
         """ TODO: Describe me """
         return int.from_bytes(self.conn.command([2, 3, 0, 0, 0, 0, 0, 0]), byteorder="little")
 
+    def auxoutselector(self, val):
+        # set aux out SMA on back panel to clklvds (0) or trig out (1)
+        self.conn.command([2, 10, val, 0, 99, 99, 99, 99])
+
     def clkout_ena(self, enable: bool) -> None:
         self.conn.command([2, 9, (1 if enable else 0), 0, 99, 99, 99, 99])  # turn on/off lvdsout_clk
 

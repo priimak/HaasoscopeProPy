@@ -205,10 +205,11 @@ class Board:
         # configure the board
         # self.cleanup()
         self.reset_adf()
-        self.reset_plls()
         self.__setupboard()
         for c in range(BoardConsts.NUM_CHAN_PER_BOARD):
             self.__setchanacdc(chan=c, ac=0, doswap=self.state.dooversample)
+        self.reset_plls()
+        self.comm.auxoutselector(0)
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
         """
