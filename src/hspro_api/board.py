@@ -15,7 +15,7 @@ from hspro_api.commands import Commands, TriggerType
 from hspro_api.conn.connection import Connection
 from hspro_api.registers_enum import RegisterIndex
 from hspro_api.time_constants import TimeConstants
-from hspro_api.utils import bit_asserted, int_to_bytes
+from hspro_api.utils import bit_asserted, int_to_bytes, find_longest_zero_stretch
 from hspro_api.waveform import Waveform
 
 
@@ -55,12 +55,14 @@ class BoardConsts:
 @dataclass
 class BoardState:
     expect_samples = 100
+    restore_samples = 100
     expect_samples_extra = 5  # enough to cover downsample shifting and toff shifting
     samplerate = 3.2  # freq in GHz
     nsunits = 1
     num_logic_inputs = 0
     tenx = 1
     ten_x_probe = [False, False]  # one for each channel
+    coupling = [ChannelCoupling.DC, ChannelCoupling.DC]  # channel coupling
     debug = False
     dopattern = 0  # set to 4 to do max varying test pattern
     debugprint = True
@@ -120,7 +122,6 @@ class BoardState:
     vline = 0
     getone = False
     units = "ns"
-    dodrawing = True
     chtext = ""
     linepens = []
     nlines = 0
@@ -144,7 +145,12 @@ class BoardState:
     lastrate = 0
     lastsize = 0
     VperD = [0.16, 0.16]
-    plljustreset = 0
+
+    plljustreset = -10
+    plljustresetdir = 0
+    phasenbad = [0] * 12
+    phaseoffset = 1  # how many positive phase steps to take from middle of good range
+
     dooversample = False
     doresamp = 0
     _trigger_pos: float = 0.5
@@ -249,9 +255,9 @@ class Board:
 
     def __update_leds(self):
         if self.state.dotwochannel:
-            self.comm.set_led((0x0f, 0x00, 0x00), (0x00, 0x0f, 0x00))
+            self.comm.set_led((100, 0, 0), (0, 100, 0))
         else:
-            self.comm.set_led((0x0f, 0x00, 0x00), (0x00, 0x00, 0x00))
+            self.comm.set_led((100, 0, 0), (0, 0, 0))
 
     def set_time_scale(self, time_scale: Duration | str) -> Duration:
         """
@@ -440,13 +446,19 @@ class Board:
         self.comm.reset_plls()
         self.state.phasecs = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]  # reset counters
 
+        self.state.plljustreset = 0
+        self.state.plljustresetdir = 1
+        self.state.phasenbad = [0] * 12  # reset nbad counters
+        self.state.restore_samples = self.state.expect_samples
+        self.state.expect_samples = 1000
+        self.__switchclock()
+
         # adjust phases (intentionally put to a place where the clockstr may be bad, it'll get adjusted
         # by 90 deg later, and then dropped to a good range)
-        n = self.state.pll_test_c0phase  # amount to adjust (+ or -)
-        for i in range(abs(n)):
-            self.__dophase(0, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c0, clklvds
-        self.state.plljustreset = 3  # get a few events
-        self.__switchclock()
+        # n = self.state.pll_test_c0phase  # amount to adjust (+ or -)
+        # for i in range(abs(n)):
+        #     self.__dophase(0, n > 0, pllnum=0, quiet=(i != abs(n) - 1))  # adjust phase of c0, clklvds
+        # self.state.plljustreset = 3  # get a few events
 
     def __dophase(self, plloutnum: int, updown: bool, pllnum: int, quiet=False):
         # for 3rd byte, 000:all 001:M 010=2:C0 011=3:C1 100=4:C2 101=5:C3 110=6:C4
@@ -613,8 +625,16 @@ class Board:
 
     def __set_channel_offset(self, channel: int) -> float | None:
         scaling = 1000 * self.state.dV[channel] / 160
+
+        # offset gain is different in AC mode
+        scaling = scaling * (1 if self.state.coupling[channel] == ChannelCoupling.DC else 245 / 160)
+
         n = int(self.state.requested_offset_V[channel] * 1000 / (1.5 * scaling))
         actual_offset_V = 1.5 * scaling * n / 1000
+
+        # offset gain is different in AC mode
+        actual_offset_V = actual_offset_V * (1 if self.state.coupling[channel] == ChannelCoupling.DC else 160 / 245)
+
         scl = scaling / 10 if self.state.ten_x_probe[channel] else scaling
         if self.__dooffset(chan=channel, val=n, scaling=scl, doswap=self.state.dooversample):
             return actual_offset_V
@@ -662,6 +682,10 @@ class Board:
                 self.comm.set_boardout(control_bit=5, value_bit=channel_coupling.value)
             case _:
                 raise RuntimeError(f"Invalid channel number {chan}")
+        self.state.coupling = channel_coupling
+
+        # changing coupling changes offset scaling factors and thus require us to set channel offset again
+        self.__set_channel_offset(channel)
 
     def set_channel_5x_attenuation(self, channel, att: bool):
         self.board_trace(f"set_channel_5x_attenuation({channel}, {att})")
@@ -683,15 +707,18 @@ class Board:
         self.comm.set_led((0x0f, 0x0f, 0x0f), (0x0f, 0x0f, 0x0f))
         self.comm.set_configured(False)
 
-    def __downsample_merging_counter_triggered(self) -> int:
+    def __downsample_merging_counter_triggered(self) -> tuple[int, int]:
         if self.state.downsamplemerging == 0:
             return 0
         else:
-            downsamplemergingcounter = self.comm.get_downsample_merging_counter_triggered()
+            downsamplemergingcounter, triggerphase = self.comm.get_downsample_merging_counter_triggered()
+            if self.state.downsamplemerging <= 1:
+                downsamplemergingcounter = 0
+
             if downsamplemergingcounter == self.state.downsamplemerging and not self.state.doexttrig:
-                return 0
+                return 0, triggerphase
             else:
-                return downsamplemergingcounter
+                return downsamplemergingcounter, triggerphase
 
     def __get_sample_triggered(self) -> int:
         b = self.comm.read_register(RegisterIndex.sample_triggered).to_bytes(4)
@@ -712,7 +739,7 @@ class Board:
                       " for board", self.board_num)
             self.state.eventcounter = new_event_counter
 
-        downsample_merging_counter_triggered = self.__downsample_merging_counter_triggered()
+        downsample_merging_counter_triggered, trigger_phase = self.__downsample_merging_counter_triggered()
 
         # length to request: each adc bit is stored as 10 bits in 2 bytes, a couple extra for shifting later
         expect_len = (self.state.expect_samples + self.state.expect_samples_extra) * 2 * self.state.nsubsamples
@@ -724,7 +751,8 @@ class Board:
         rx_len = len(waveform_data)
         self.state.total_rx_len += rx_len
         trace_1, trace_2 = self.__parse_waveform_data(
-            waveform_data, self.state.expect_samples, downsample_merging_counter_triggered, sample_triggered
+            waveform_data, self.state.expect_samples, downsample_merging_counter_triggered,
+            sample_triggered, trigger_phase
         )
         pos = self.state.absolute_trigger_pos * self.state.samples_per_row_per_waveform()
 
@@ -740,7 +768,8 @@ class Board:
             )
 
     def __parse_waveform_data(
-            self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int
+            self, data: bytes, expect_samples: int, downsample_merging_counter: int, sample_triggered: int,
+            trigger_phase: int
     ) -> tuple[list[float], list[float]]:
         nbadclkA = 0
         nbadclkB = 0
@@ -767,7 +796,8 @@ class Board:
         datasize = 10 * self.state.expect_samples * (2 if self.state.dotwochannel else 4)
 
         for s in range(0, expect_samples + self.state.expect_samples_extra):
-            vals = unpackedsamples[s * self.state.nsubsamples + 40:s * self.state.nsubsamples + 50]
+            nsubsamples = self.state.nsubsamples
+            vals = unpackedsamples[s * nsubsamples + 40:s * nsubsamples + 50]
             if vals[9] != -16657: print("no beef?")  # -16657 is 0xbeef
             if vals[8] != 0 or (self.state.lastclk != 341 and self.state.lastclk != 682):
                 # only bother checking if there was a clkstr problem detected in firmware, or we need to decode 
@@ -786,31 +816,35 @@ class Board:
                         nbadstr = nbadstr + 1
                         # print("s=", s, "n=", n, "str", val, binprint(val))
             if self.state.dotwochannel:
-                samp = s * 20 - downsampleoffset
+                samp = s * 20 - downsampleoffset - (trigger_phase >> 4) // 2
                 nsamp = 20
+                nstart = 0
                 if samp < 0:
                     nsamp = 20 + samp
+                    nstart = -samp
                     samp = 0
                 if samp + 20 >= datasize:
                     nsamp = datasize - samp
                 if 0 < nsamp <= 20:
                     # ch = 1 if n < 20 else 0
                     traces[0][samp:samp + nsamp] = npunpackedsamples[
-                                                   s * self.state.nsubsamples + 20:s * self.state.nsubsamples + 20 + nsamp]
+                                                   s * nsubsamples + 20 + nstart:s * nsubsamples + 20 + nstart + nsamp]
 
                     traces[1][samp:samp + nsamp] = npunpackedsamples[
-                                                   s * self.state.nsubsamples:s * self.state.nsubsamples + nsamp]
+                                                   s * nsubsamples + nstart:s * nsubsamples + nstart + nsamp]
             else:
-                samp = s * 40 - downsampleoffset
+                samp = s * 40 - downsampleoffset - (trigger_phase >> 4)
                 nsamp = 40
+                nstart = 0
                 if samp < 0:
                     nsamp = 40 + samp
+                    nstart = -samp
                     samp = 0
                 if samp + 40 >= datasize:
                     nsamp = datasize - samp
                 if 0 < nsamp <= 40:
                     traces[0][samp:samp + nsamp] = npunpackedsamples[
-                                                   s * self.state.nsubsamples:s * self.state.nsubsamples + nsamp]
+                                                   s * nsubsamples + nstart:s * nsubsamples + nstart + nsamp]
 
         self.__adjustclocks(nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr)
 
@@ -823,15 +857,43 @@ class Board:
         return traces
 
     def __adjustclocks(self, nbadclkA, nbadclkB, nbadclkC, nbadclkD, nbadstr):
-        if (nbadclkA + nbadclkB + nbadclkC + nbadclkD + nbadstr > 4) and self.state.phasecs[0][0] < 20:
-            # adjust phase by 90 deg
-            n = 6  # amount to adjust clklvds (positive)
-            for i in range(n): self.__dophase(0, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clklvds
-        if self.state.plljustreset > 0: self.state.plljustreset -= 1  # count down while collecting events
-        if self.state.plljustreset == 1:
-            # adjust back down to a good range after detecting that it needs to be shifted by 90 deg or not
-            n = self.state.pll_test_c0phase_down  # amount to adjust (positive)
-            for i in range(n): self.__dophase(0, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of clklvds
+        plloutnum = 0  # adjusting clklvds
+        plloutnum2 = 1  # adjusting clklvdsout
+        if 0 <= self.state.plljustreset < 12:  # we start by going up in phase
+            nbad = nbadclkA + nbadclkB + nbadclkC + nbadclkD + nbadstr
+            self.state.phasenbad[self.state.plljustreset] += nbad
+            # adjust phase of plloutnum and plloutnum2
+            self.__dophase(plloutnum, (self.state.plljustresetdir == 1), pllnum=0, quiet=True)
+            self.__dophase(plloutnum2, (self.state.plljustresetdir == 1), pllnum=0, quiet=True)
+
+            self.state.plljustreset += self.state.plljustresetdir
+
+        elif self.state.plljustreset >= 12:
+            if self.state.plljustreset == 15: self.state.plljustresetdir = -1
+            self.state.plljustreset += self.state.plljustresetdir
+            # adjust phase of plloutnum and plloutnum2
+            self.__dophase(plloutnum, (self.state.plljustresetdir == 1), pllnum=0, quiet=True)
+            self.__dophase(plloutnum2, (self.state.plljustresetdir == 1), pllnum=0, quiet=True)
+
+        elif self.state.plljustreset == -1:
+            print("bad clkstr per phase step:", self.state.phasenbad)
+            startofzeros, lengthofzeros = find_longest_zero_stretch(self.state.phasenbad, True)
+            print("good phase starts at", startofzeros, "and goes for", lengthofzeros, "steps")
+            if startofzeros >= 12: startofzeros -= 12
+            n = startofzeros + lengthofzeros // 2 + self.state.phaseoffset  # amount to adjust clklvds (positive)
+            if n >= 12: n -= 12
+            n += 1  # extra 1 because we went to phase=-1 before
+            for i in range(n):
+                self.__dophase(plloutnum, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of plloutnum
+                self.__dophase(plloutnum2, True, pllnum=0, quiet=(i != n - 1))  # adjust phase of plloutnum
+            self.state.plljustreset += self.state.plljustresetdir
+
+        elif self.state.plljustreset == -2:
+            self.set_memory_depth(self.state.restore_samples)
+            self.state.plljustreset += self.state.plljustresetdir
+
+        elif self.state.plljustreset == -3:
+            self.state.plljustreset += self.state.plljustresetdir
 
     def force_data_acquisition(self) -> bool:
         n_tries = 20
@@ -881,6 +943,7 @@ class Board:
         """
         self.board_trace(f"set_memory_depth({depth})")
         self.state.expect_samples = depth
+        self.state.restore_samples = depth
 
     def set_channel_input_impedance(self, channel: int, impedance: InputImpedance) -> None:
         self.board_trace(f"set_channel_input_impedance({channel}, {impedance})")

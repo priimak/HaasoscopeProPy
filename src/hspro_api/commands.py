@@ -82,9 +82,10 @@ class Commands:
         """ TODO: Describe me """
         return int.from_bytes(self.conn.command([2, 3, 0, 0, 0, 0, 0, 0]), byteorder="little")
 
-    def get_downsample_merging_counter_triggered(self) -> int:
+    def get_downsample_merging_counter_triggered(self) -> tuple[int, int]:
         """ TODO: Describe me """
-        return self.conn.command([2, 4, 0, 0, 0, 0, 0, 0])[0]
+        results = self.conn.command([2, 4, 0, 0, 0, 0, 0, 0])
+        return results[0], results[1]  # downsamplemergingcounter, triggerphase
 
     def set_lvdsout_spare(self):
         """ TODO: Implement me """
