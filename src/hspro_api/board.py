@@ -980,11 +980,17 @@ class Board:
         return self.state.samples_per_row_per_waveform() * self.state.expect_samples / 10
 
 
-def mk_board(connection: Connection, debug: bool, debug_spi: bool, show_board_call_trace: bool = False):
+def mk_board(
+        connection: Connection,
+        debug: bool,
+        debug_spi: bool,
+        show_board_call_trace: bool = False,
+        progress_callback: Callable[[int], None] = lambda _: None
+) -> Board:
     tracer = lambda _: None
     if show_board_call_trace:
         tracer = lambda s: print(s)
-    return Board(connection, debug, debug_spi, tracer)
+    return Board(connection, debug, debug_spi, tracer, progress_callback)
 
 
 def connect(debug: bool = False, debug_spi: bool = False, show_board_call_trace: bool = False) -> list[Board]:
