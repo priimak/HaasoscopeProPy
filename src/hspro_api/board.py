@@ -191,8 +191,10 @@ class Board:
             connection: Connection,
             debug: bool,
             debug_spi: bool,
-            board_trace: Callable[[str], None] = lambda _: None
+            board_trace: Callable[[str], None] = lambda _: None,
+            progress_callback: Callable[[int], None] = lambda _: None,
     ) -> None:
+        progress_callback(1)
         self.board_trace = board_trace
         self.comm = Commands(connection)
         # self.comm.spi_command("CAL_EN", 0x00, 0x61, 0x00, True)
@@ -211,6 +213,8 @@ class Board:
         self.reset_plls()
         self.comm.auxoutselector(0)
 
+        progress_callback(2)
+        i = 2
         while self.state.plljustreset != -2:
             self.force_arm_trigger(TriggerType.AUTO)
             match self.wait_for_waveform(timeout_s=2):
@@ -218,6 +222,8 @@ class Board:
                     self.get_waveforms()
                 case _:
                     raise RuntimeError("Failed wait for waveform during initial data acquisition")
+            i = (i + 1) % 10
+            progress_callback(i)
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
         """
