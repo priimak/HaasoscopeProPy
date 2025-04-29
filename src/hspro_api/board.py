@@ -211,6 +211,16 @@ class Board:
         self.reset_plls()
         self.comm.auxoutselector(0)
 
+        # while self.state.plljustreset != -2:
+        #     if not self.force_arm_trigger(TriggerType.AUTO):
+        #         raise RuntimeError("Failed to perform initial data acquisition")
+        #     else:
+        #         match self.wait_for_waveform(timeout_s=2):
+        #             case WaveformAvailable(_):
+        #                 self.get_waveforms()
+        #             case _:
+        #                 raise RuntimeError("Failed wait for waveform during initial data acquisition")
+
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
         """
         Set flag on a channel indicating if it is connected to 10x probe. Since this affects voltage/div value,
@@ -317,7 +327,7 @@ class Board:
             downsample_merging=self.state.downsamplemerging
         )
 
-    def force_arm_trigger(self, trigger_type: TriggerType) -> bool:
+    def force_arm_trigger(self, trigger_type: TriggerType) -> None:
         retval = self.comm.force_arm_trigger(
             trigger_type=trigger_type,
             two_channels=self.state.dotwochannel,
@@ -326,7 +336,6 @@ class Board:
             expect_samples=self.state.expect_samples
         )
         self.board_trace(f"force_arm_trigger({trigger_type}) -> {retval}")
-        return retval
 
     def set_trigger_props(
             self,
