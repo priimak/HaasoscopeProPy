@@ -257,7 +257,7 @@ class Commands:
         return response[0]
 
     def set_voltage_div(self, channel: int, dV: float, do_oversample: bool, ten_x_probe: bool) -> float:
-        scaling_factor = 0.1605 * (10 if ten_x_probe else 1) * (2 if do_oversample else 1) * 0.8
+        scaling_factor = 0.16 * (10 if ten_x_probe else 1) * (2 if do_oversample else 1) * 0.8
         db = int(math.log10(scaling_factor / dV) * 20)
 
         actual_voltage_per_division = scaling_factor / pow(10, db / 20.0) / 0.8
