@@ -211,15 +211,13 @@ class Board:
         self.reset_plls()
         self.comm.auxoutselector(0)
 
-        # while self.state.plljustreset != -2:
-        #     if not self.force_arm_trigger(TriggerType.AUTO):
-        #         raise RuntimeError("Failed to perform initial data acquisition")
-        #     else:
-        #         match self.wait_for_waveform(timeout_s=2):
-        #             case WaveformAvailable(_):
-        #                 self.get_waveforms()
-        #             case _:
-        #                 raise RuntimeError("Failed wait for waveform during initial data acquisition")
+        while self.state.plljustreset != -2:
+            self.force_arm_trigger(TriggerType.AUTO)
+            match self.wait_for_waveform(timeout_s=2):
+                case WaveformAvailable(_):
+                    self.get_waveforms()
+                case _:
+                    raise RuntimeError("Failed wait for waveform during initial data acquisition")
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
         """
@@ -355,8 +353,10 @@ class Board:
             raise RuntimeError("Trigger level must be between -1 and 1.")
 
         t_level = int(min(max(128.0 * trigger_level + 127.0, 0.0), 255))
-        if (t_level + trigger_delta >= 256) or (t_level - trigger_delta) <= 0:
-            raise RuntimeError("Invalid combindation of trigger level and delta.")
+        if t_level + trigger_delta >= 256:
+            t_level = 255 - trigger_delta
+        elif t_level - trigger_delta <= 0:
+            t_level = trigger_delta + 1
 
         self.state.trigger_pos = trigger_pos
         self.state.trigger_pos = self.state.absolute_trigger_pos / self.state.expect_samples
