@@ -193,6 +193,7 @@ class Board:
             debug_spi: bool,
             board_trace: Callable[[str], None] = lambda _: None,
             progress_callback: Callable[[int], None] = lambda _: None,
+            wrap_progress_counter_at: int = 35
     ) -> None:
         progress_callback(1)
         self.board_trace = board_trace
@@ -222,7 +223,7 @@ class Board:
                     self.get_waveforms()
                 case _:
                     raise RuntimeError("Failed wait for waveform during initial data acquisition")
-            i = (i + 1) % 10
+            i = (i + 1) % wrap_progress_counter_at
             progress_callback(i)
 
     def set_channel_10x_probe(self, channel: int, ten_x_probe: bool) -> float:
@@ -985,12 +986,13 @@ def mk_board(
         debug: bool,
         debug_spi: bool,
         show_board_call_trace: bool = False,
-        progress_callback: Callable[[int], None] = lambda _: None
+        progress_callback: Callable[[int], None] = lambda _: None,
+        wrap_progress_counter_at: int = 35
 ) -> Board:
     tracer = lambda _: None
     if show_board_call_trace:
         tracer = lambda s: print(s)
-    return Board(connection, debug, debug_spi, tracer, progress_callback)
+    return Board(connection, debug, debug_spi, tracer, progress_callback, wrap_progress_counter_at)
 
 
 def connect(debug: bool = False, debug_spi: bool = False, show_board_call_trace: bool = False) -> list[Board]:
