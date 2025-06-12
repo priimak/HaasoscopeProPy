@@ -14,7 +14,7 @@ class Connection(ABC):
     def recv(self, recv_len: int) -> bytes:
         """ Read `recv_len` bytes. """
 
-    def command(self, payload: list[int], read_response: bool = False) -> bytes | None:
+    def command(self, payload: list[int], read_response: bool = True) -> bytes | None:
         data = payload + ([0] * (8 - len(payload)))
         self.send(data)
         if self.debug:
