@@ -179,7 +179,7 @@ class Commands:
 
         pll_num: can only be 0, 1, 2 or 3.
         """
-        self.conn.command([6, pll_num, int(pll_out_num + 2), (1 if up_down else 0), 0, 0, 0, 0])
+        self.conn.command([6, pll_num, int(pll_out_num + 2), (1 if up_down else 0), 0, 0, 0, 0], read_response=False)
 
     def clk_switch(self) -> int:
         """ TODO: Describe me """
