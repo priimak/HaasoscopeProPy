@@ -57,9 +57,15 @@ class Commands:
         else:
             return False, -1
 
+    def get_clock_info(self) -> int:
+        version = self.conn.command([2, 5, 0, 0, 99, 99, 99, 99])[0]
+        if self.debug:
+            print(f"clock_info = {version}")
+        return version
+
     def get_version(self) -> int:
         """ Return firmware version. """
-        version = self.read_register(RegisterIndex.version)
+        version = self.conn.command([2, 0, 100, 100, 100, 100, 100, 100])[0]
         if self.debug:
             print(f"version = {version}")
         return version

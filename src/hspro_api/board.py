@@ -468,7 +468,7 @@ class Board:
         self.state.phasenbad = [0] * 12  # reset nbad counters
         self.state.restore_samples = self.state.expect_samples
         self.state.expect_samples = 1000
-        self.__switchclock()
+        # self.__switchclock()
 
         # adjust phases (intentionally put to a place where the clockstr may be bad, it'll get adjusted
         # by 90 deg later, and then dropped to a good range)
@@ -538,8 +538,12 @@ class Board:
         self.comm.spi_command("TAD", 0x02, 0xB6, tad, False)  # adjust TAD (time of ADC relative to clk)
 
         # adjust full scale ADC range 1V for inputs A and B
-        self.comm.spi_command2("FS_RANGE A", 0x00, 0x30, 0xff, 0xff, False)
-        self.comm.spi_command2("FS_RANGE B", 0x00, 0x32, 0xff, 0xff, False)
+        # self.comm.spi_command2("FS_RANGE A", 0x00, 0x30, 0xff, 0xff, False)
+        # self.comm.spi_command2("FS_RANGE B", 0x00, 0x32, 0xff, 0xff, False)
+
+        # adjust full scale ADC range ?V for inputs A and B
+        self.comm.spi_command2("FS_RANGE A", 0x00, 0x30, 0xA0, 0x00, False)
+        self.comm.spi_command2("FS_RANGE B", 0x00, 0x32, 0xA0, 0x00, False)
 
         if self.state.dooverrange:
             self.comm.spi_command("OVR_CFG", 0x02, 0x13, 0x0f, False)  # overrange on

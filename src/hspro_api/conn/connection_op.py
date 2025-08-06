@@ -27,6 +27,11 @@ def connect(debug: bool) -> list[Connection]:
                 cmd.get_version()
                 cmd.get_version()
 
+                cmd.get_version()
+                cmd.get_clock_info()
+                cmd.get_clock_info()
+                cmd.get_version()
+
                 devices.append(connection)
                 board_number = board_number + 1
             else:
