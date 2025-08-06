@@ -177,7 +177,7 @@ class Commands:
 
     def reset_plls(self) -> None:
         """ TODO: Describe me """
-        self.conn.command([5, 0, 0, 0, 0, 0, 0, 0])
+        self.conn.command([5, 99, 99, 99, 100, 100, 100, 100])
 
     def set_clk_phase_adjust(self, pll_num: int, pll_out_num: int, up_down: bool) -> None:
         """
